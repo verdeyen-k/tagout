@@ -106,12 +106,23 @@
         const cap = add(g, new THREE.SphereGeometry(0.17, 16, 10), yel, 0, 0.02, 0);
         cap.scale.y = 0.5;
         add(g, new THREE.CylinderGeometry(0.035, 0.045, 0.14, 8), M('#6b4a1a'), 0, 0.12, 0);
+        // 4 peel strips: each one bends over the top of the head, then hangs down and flares out a bit.
+        const spot = M('#6b4a1a');
+        const L1 = 0.3, L2 = 0.26;
         for (let i = 0; i < 4; i++) {
           const pivot = new THREE.Group();
           pivot.rotation.y = (i * Math.PI) / 2 + Math.PI / 4;
-          const flap = add(pivot, new THREE.BoxGeometry(0.2, 0.5, 0.04), yel, 0, -0.15, 0.33);
-          flap.rotation.x = 0.35;
-          add(pivot, new THREE.BoxGeometry(0.16, 0.05, 0.05), M('#6b4a1a'), 0, -0.4, 0.42);
+          const h1 = new THREE.Group();
+          h1.position.set(0, 0, 0.13);
+          h1.rotation.x = -0.96; // top part lies along the head (~55° from straight down)
+          add(h1, new THREE.BoxGeometry(0.17, L1, 0.04), yel, 0, -L1 / 2, 0);
+          const h2 = new THREE.Group();
+          h2.position.set(0, -L1, 0);
+          h2.rotation.x = 0.61; // bottom part hangs down, flaring out ~20°
+          add(h2, new THREE.BoxGeometry(0.15, L2, 0.04), yel, 0, -L2 / 2, 0);
+          add(h2, new THREE.BoxGeometry(0.13, 0.05, 0.05), spot, 0, -L2, 0);
+          h1.add(h2);
+          pivot.add(h1);
           g.add(pivot);
         }
         height = 0.2;
