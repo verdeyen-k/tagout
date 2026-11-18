@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tag Out</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Nunito:wght@400;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<!-- main menu -->
+<div id="menu">
+  <div id="home" class="menu-card">
+    <h1 class="title">TAG<br>OUT</h1>
+    <p class="tagline">Don't be IT when the timer runs out!</p>
+    <button id="btn-play" class="big primary">▶ Play</button>
+    <button id="btn-maker" class="big">🛠 Map Maker</button>
+  </div>
+  <div id="setup" class="menu-card wide" hidden>
+    <h2 class="title small">Game setup</h2>
+    <div class="su-row">
+      <span>Players</span>
+      <button id="su-minus" aria-label="Fewer players">−</button><b id="su-count">4</b><button id="su-plus" aria-label="More players">+</button>
+      <small id="su-rounds"></small>
+    </div>
+    <div id="su-slots"></div>
+    <div class="su-row">
+      <label>Round <select id="su-len"><option value="30">30 s</option><option value="45">45 s</option><option value="60">60 s</option><option value="90">90 s</option></select></label>
+      <label class="grow">Map <select id="su-map"></select></label>
+    </div>
+    <p id="su-note" class="hint"></p>
+    <div class="su-row">
+      <button id="su-back">◀ Back</button>
+      <button id="su-start" class="big primary grow">GO!</button>
+    </div>
+  </div>
+</div>
+
+<!-- map maker -->
+<div id="editor-ui" hidden>
+  <header id="ed-top">
+    <button data-act="menu" title="Back to menu">◀ Menu</button>
+    <input id="ed-name" maxlength="30" spellcheck="false" title="Map name">
+    <div class="group">
+      <button data-act="new">New</button>
+      <button data-act="open">Open</button>
+      <button data-act="save" title="Ctrl+S">💾 Save</button>
+      <button data-act="export" title="Download the map as a file">Export</button>
+      <button data-act="import" title="Load a map file">Import</button>
+    </div>
+    <div class="group">
+      <button data-act="undo" title="Undo (Ctrl+Z)">↶</button>
+      <button data-act="redo" title="Redo (Ctrl+Y)">↷</button>
+    </div>
+    <button data-act="test" class="primary" title="T">▶ Test play</button>
+  </header>
+  <nav id="ed-tools"></nav>
+  <aside id="ed-panel"></aside>
+  <div id="ed-help">
+    <span><b>Right-drag</b> look</span><span><b>WASD</b> fly</span><span><b>Q/E</b> down/up</span><span><b>Shift</b> fast</span>
+    <span><b>Click</b> place</span><span><b>R</b> turn</span><span><b>Del</b> delete</span><span><b>G</b> grid size</span><span><b>Ctrl+Z</b> undo</span>
+  </div>
+  <div id="ed-toast"></div>
+  <input type="file" id="ed-file" accept=".json,application/json" hidden>
+
+  <dialog id="ed-open">
+    <h2>Your maps</h2>
+    <ul id="ed-open-list"></ul>
+    <p class="hint">The 5 official maps will show up here once they're built.</p>
+    <div class="btnrow"><button data-close>Close</button></div>
+  </dialog>
+  <dialog id="ed-new">
+    <h2>New map: pick a look</h2>
+    <div id="ed-new-list"></div>
+    <p class="hint">You can change everything later in 🌍 Map settings.</p>
+    <div class="btnrow"><button data-close>Cancel</button></div>
+  </dialog>
+</div>
+
+<!-- game HUD -->
+<div id="game-ui" hidden>
+  <div class="vignette"></div>
+  <div class="hud-top">
+    <span id="hud-round"></span>
+    <span id="hud-time">1:00</span>
+    <span id="hud-map"></span>
+  </div>
+  <ul id="hud-players"></ul>
+  <div id="banner"></div>
+  <div id="subbanner"></div>
+  <div id="hud-spectate" hidden>👀 Watching. You're out this game.</div>
+  <div id="hud-me">
+    <span id="hud-role">Runner</span>
+    <div class="stamina"><div id="game-stamina"></div></div>
+    <div class="keys"><b>WASD</b> move · <b>Shift</b> run · <b>Space</b> jump ×2 · <b>F</b> dash · <b>Q</b> back dash · <b>C</b> crawl · <b>Z/X</b> camera · <b>Esc</b> pause</div>
+  </div>
+  <div id="pause" class="overlay" hidden>
+    <div class="menu-card">
+      <h2 class="title small">Paused</h2>
+      <button id="btn-resume" class="big primary">Keep playing</button>
+      <button id="btn-quit" class="big">Quit to menu</button>
+    </div>
+  </div>
+  <div id="results" class="overlay" hidden>
+    <div class="menu-card">
+      <h2 class="title small">Final ranking</h2>
+      <ol id="results-list"></ol>
+      <button id="btn-again" class="big primary">Play again</button>
+      <button id="btn-results-menu" class="big">Menu</button>
+    </div>
+  </div>
+</div>
+
+<!-- test play HUD -->
+<div id="play-ui" hidden>
+  <div class="hud-top">
+    <span id="play-status">Standing</span>
+    <div class="stamina"><div id="stamina-fill"></div></div>
+  </div>
+  <div class="hud-help">
+    <span><b>WASD</b> move</span><span><b>Shift</b> run</span><span><b>Space</b> jump ×2</span><span><b>F</b> dash</span>
+    <span><b>Q</b> back dash</span><span><b>C</b> crawl</span><span><b>Z/X</b> or drag: camera</span><span><b>Esc</b> back to maker</span>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/mapformat.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/shared.js"></script>
+<script src="js/hats.js"></script>
+<script src="js/maps-official.js"></script>
+<script src="js/testplay.js"></script>
+<script src="js/editor.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
