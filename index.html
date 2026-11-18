@@ -18,7 +18,43 @@
     <h1 class="title">TAG<br>OUT</h1>
     <p class="tagline">Don't be IT when the timer runs out!</p>
     <button id="btn-play" class="big primary">▶ Play</button>
+    <button id="btn-online" class="big">🌐 Play online</button>
     <button id="btn-maker" class="big">🛠 Map Maker</button>
+  </div>
+  <div id="online" class="menu-card" hidden>
+    <h2 class="title small">Play online</h2>
+    <p class="hint">Play with friends on their own computers. Online, everyone is called by their color.</p>
+    <label class="su-row">Your hat <select id="on-hat" class="grow"></select></label>
+    <button id="on-make" class="big primary">Make a room</button>
+    <div class="su-row">
+      <input id="on-code" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code">
+      <button id="on-join" class="big grow">Join a room</button>
+    </div>
+    <p id="on-error" class="error"></p>
+    <button id="on-back">◀ Back</button>
+  </div>
+  <div id="lobby" class="menu-card wide" hidden>
+    <h2 class="title small">Room <span id="lb-code" class="code"></span></h2>
+    <p id="lb-hint" class="hint"></p>
+    <ul id="lb-players"></ul>
+    <div id="lb-host">
+      <div class="su-row">
+        <span>Bots</span>
+        <button id="lb-minus" aria-label="Fewer bots">−</button><b id="lb-bots">0</b><button id="lb-plus" aria-label="More bots">+</button>
+        <select id="lb-skill" aria-label="Bot skill"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option></select>
+        <small id="lb-rounds"></small>
+      </div>
+      <div class="su-row">
+        <label>Round <select id="lb-len"><option value="30">30 s</option><option value="45">45 s</option><option value="60">60 s</option><option value="90">90 s</option></select></label>
+        <label class="grow">Map <select id="lb-map"></select></label>
+      </div>
+    </div>
+    <p id="lb-cfg" class="hint"></p>
+    <label class="su-row">Your hat <select id="lb-hat" class="grow"></select></label>
+    <div class="su-row">
+      <button id="lb-leave">◀ Leave</button>
+      <button id="lb-start" class="big primary grow">GO!</button>
+    </div>
   </div>
   <div id="setup" class="menu-card wide" hidden>
     <h2 class="title small">Game setup</h2>
@@ -128,11 +164,14 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <script src="js/mapformat.js"></script>
 <script src="js/physics.js"></script>
 <script src="js/shared.js"></script>
 <script src="js/hats.js"></script>
 <script src="js/maps-official.js"></script>
+<script src="js/net.js"></script>
 <script src="js/testplay.js"></script>
 <script src="js/editor.js"></script>
 <script src="js/game.js"></script>

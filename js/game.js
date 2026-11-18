@@ -1,4 +1,8 @@
 // The tag game: rounds, IT, tagging, eliminations, bots, camera and effects.
+// Works offline (you + bots on this computer) and online (one person per computer, plus bots).
+// The "host" decides the rules (the map, who's IT, tags, who's out) and sends them as events.
+// Every computer applies the same events, so everyone sees the same game.
+// Each computer moves its own player; the host also moves the bots.
 (function () {
   'use strict';
   const TG = window.TG;
@@ -10,6 +14,7 @@
     hard:   { react: 0.12, lead: 0.7,  fear: 14, dash: 0.55, tagDelay: 0.08, speed: 1.0 },
   };
   const TAG_H = 1.2, TAG_V = 1.6, IT_BOOST = 1.06, TAG_FREEZE = 1.5, NO_TAG_BACK = 3, IT_HEADSTART = 2;
+  const SEND_EVERY = 1 / 15, INTERP = 0.1;
 
   let renderer, canvas, camera;
   let st = null;
@@ -30,7 +35,11 @@
     });
     $('btn-resume').addEventListener('click', () => setPaused(false));
     $('btn-quit').addEventListener('click', () => { stop(); TG.Main.showMenu(); });
-    $('btn-again').addEventListener('click', () => { const s = st.setup; stop(); start(s); });
+    $('btn-again').addEventListener('click', () => {
+      const s = st.setup, online = st.online;
+      stop();
+      if (online) TG.Main.showLobby(); else start(s);
+    });
     $('btn-results-menu').addEventListener('click', () => { stop(); TG.Main.showMenu(); });
   }
   function resize(a) { camera.aspect = a; camera.updateProjectionMatrix(); }
@@ -40,22 +49,33 @@
     const custom = Object.values(TG.Store.all()).map((m) => MF.fixMap(m));
     return { official: (TG.OFFICIAL_MAPS || []).map((m) => MF.fixMap(m)), custom };
   }
-  function pickMap() {
+  function findMap(id) {
+    if (st.setup.cmap && st.setup.cmap.id === id) return st.setup.cmap;
+    const { official, custom } = allMaps();
+    return official.concat(st.online ? [] : custom).find((m) => m.id === id) || null;
+  }
+  function pickMap(round) {
     const { official, custom } = allMaps();
     const list = official.length ? official : custom;
     const mode = st.setup.mapMode;
     if (mode && mode.startsWith('map:')) {
-      const id = mode.slice(4);
-      const m = official.concat(custom).find((x) => x.id === id);
+      const m = findMap(mode.slice(4));
       if (m) return m;
     }
     if (!list.length) return MF.newMap('day');
     if (mode === 'random') return list[Math.floor(Math.random() * list.length)];
-    return list[(st.round - 1) % list.length];
+    return list[(round - 1) % list.length];
+  }
+  function spawnsFor(map) {
+    const s = MF.spawnsOf(map);
+    if (!s.length) for (let i = 0; i < 8; i++) s.push({ x: Math.cos(i) * 5, y: 3, z: Math.sin(i) * 5 });
+    return s;
   }
 
   // ---------- start / stop ----------
-  function start(setup) {
+  // setup: { players: [{ key, name, color, hat, kind: 'me' | 'bot' | 'remote', skill }], roundLen, mapMode, cmap? }
+  // net: an online room (TG.Net), or nothing for a game on this computer.
+  function start(setup, net) {
     const players = setup.players.map((s, i) => {
       const ch = TG.makeCharacter(s.color);
       const hat = TG.makeHat(s.hat);
@@ -66,27 +86,42 @@
       tagN.position.y = tagIt.position.y = tagY;
       tagIt.visible = false;
       ch.root.add(tagN, tagIt);
+      const kind = s.kind || (s.ctrl === 'you' ? 'me' : 'bot');
       return {
-        id: i, name: s.name, color: s.color, human: s.ctrl === 'you',
+        key: s.key || 'k' + i, name: s.name, color: s.color, kind, human: kind === 'me',
         skillName: s.skill, skill: SKILL[s.skill] || SKILL.normal,
-        alive: true, ch, hat, tagN, tagIt, body: null, ai: {},
+        alive: true, ch, hat, tagN, tagIt, body: null, ai: {}, buf: [], rs: 0,
       };
     });
     st = {
-      setup, players, round: 0, totalRounds: players.length - 1, elim: [],
+      setup, players, byKey: new Map(players.map((p) => [p.key, p])),
+      net: net || null, online: !!net, host: !net || net.isHost,
+      inbox: [], pending: false, pendingT: 0, claimT: 0, sendT: 0,
+      round: 0, totalRounds: players.length - 1, elim: [],
       human: players.find((p) => p.human) || null,
       time: 0, phase: 'none', paused: false, parts: [],
       scene: null, mapGroup: null,
     };
+    if (net) {
+      net.openGame({
+        event: (ev) => { if (st) st.inbox.push(ev); },
+        pos: onPos,
+        claim: (c) => { if (st) st.inbox.push({ t: '_claim', c }); },
+        left: (key) => { if (st) st.inbox.push({ t: '_left', who: key }); },
+      });
+    }
     $('game-ui').hidden = false;
     $('results').hidden = true;
     $('pause').hidden = true;
+    $('btn-again').textContent = net ? 'Back to the room' : 'Play again';
+    $('btn-quit').textContent = net ? 'Leave the room' : 'Quit to menu';
     I.clear();
-    startRound();
+    if (st.host) hostStartRound();
   }
 
   function stop() {
     if (!st) return;
+    if (st.net) st.net.closeGame();
     clearScene();
     for (const p of st.players) p.ch.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.map) o.material.map.dispose(); });
     st = null;
@@ -108,10 +143,95 @@
     return a;
   }
 
-  function startRound() {
+  // ---------- the host decides; everyone applies ----------
+  function send(ev) {
+    if (st.online) st.net.send(ev);
+    else st.inbox.push(ev);
+  }
+  function setPending() { st.pending = true; st.pendingT = 3; }
+
+  function hostStartRound() {
+    const r = st.round + 1;
+    const map = pickMap(r);
+    const n = spawnsFor(map).length;
+    const alive = alivePlayers();
+    const order = shuffle([...Array(n).keys()]);
+    const spots = {};
+    alive.forEach((p, i) => { spots[p.key] = [order[i % n], i >= n ? 1 : 0]; });
+    setPending();
+    send({ t: 'round', r, map: map.id, it: alive[Math.floor(Math.random() * alive.length)].key, spots });
+  }
+  function hostTag(by, who) {
+    setPending();
+    send({ t: 'tag', r: st.round, by: by.key, who: who.key });
+  }
+
+  function applyEvent(ev) {
+    if (!ev || typeof ev.t !== 'string') return;
+    switch (ev.t) {
+      case '_claim': {
+        const c = ev.c || {};
+        if (!st.host || st.pending || st.phase !== 'play' || c.r !== st.round || !st.it || st.it.key !== c.by) return;
+        const q = st.byKey.get(c.who);
+        if (q && canTag(st.it, q)) hostTag(st.it, q);
+        return;
+      }
+      case '_left': {
+        const p = st.byKey.get(ev.who);
+        if (st.host && p && p.kind === 'remote') send({ t: 'bot', who: p.key });
+        return;
+      }
+      case 'round': if (ev.r === st.round + 1) applyRound(ev); return;
+      case 'tag': {
+        const by = st.byKey.get(ev.by), who = st.byKey.get(ev.who);
+        if (ev.r !== st.round || !by || !who || by !== st.it || !who.alive || who === by) return;
+        if (st.phase === 'countdown') { st.phase = 'play'; st.t = 0; }
+        if (st.phase !== 'play') return;
+        st.pending = false;
+        applyTag(by, who);
+        return;
+      }
+      case 'out': {
+        const p = st.byKey.get(ev.who);
+        if (ev.r !== st.round || !p || !p.alive || (st.phase !== 'play' && st.phase !== 'countdown')) return;
+        st.pending = false;
+        endRound(p);
+        return;
+      }
+      case 'win': {
+        const p = st.byKey.get(ev.who);
+        if (!p || st.phase === 'over') return;
+        st.pending = false;
+        finish(p);
+        return;
+      }
+      case 'bot': {
+        const p = st.byKey.get(ev.who);
+        if (!p || p.kind !== 'remote') return;
+        if (st.host) {
+          // a friend left: a bot takes over from where they were
+          p.kind = 'bot';
+          const b = P.createBody(p.body.x, p.body.y, p.body.z);
+          b.yaw = p.body.yaw;
+          p.body = b;
+          p.ai = newAi(b);
+          p.skill = SKILL.normal;
+        }
+        sub(`${p.name} left. A bot is playing for them.`, 2.5);
+        return;
+      }
+    }
+  }
+
+  function newAi(b) {
+    return { think: 0, dirX: 0, dirZ: 0, sx: b.x, sz: b.z, stuckT: 0, detourT: 0, crawlT: 0, tagT: 0, wanderT: 0 };
+  }
+
+  function applyRound(ev) {
     clearScene();
-    st.round++;
-    const map = pickMap();
+    st.round = ev.r;
+    st.pending = false;
+    const map = findMap(ev.map) || MF.newMap('day');
     st.map = map;
     const scene = new THREE.Scene();
     MF.applySky(scene, map.settings);
@@ -123,8 +243,7 @@
     st.colliders = MF.collidersOf(map);
     st.gravity = map.settings.gravity;
     st.half = map.settings.size / 2;
-    st.spawns = MF.spawnsOf(map);
-    if (!st.spawns.length) for (let i = 0; i < 8; i++) st.spawns.push({ x: Math.cos(i) * 5, y: 3, z: Math.sin(i) * 5 });
+    st.spawns = spawnsFor(map);
     st.wanderPts = buildWanderPoints(map);
 
     // IT ring
@@ -137,19 +256,22 @@
     st.itRing = ring;
     scene.add(st.itMark);
 
-    const alive = st.players.filter((p) => p.alive);
-    const spots = shuffle(st.spawns.slice());
+    const alive = alivePlayers();
+    const spots = ev.spots || {};
     alive.forEach((p, i) => {
-      const sp = spots[i % spots.length];
-      const off = i >= spots.length ? 1.2 : 0;
+      const s = Array.isArray(spots[p.key]) ? spots[p.key] : [i, 0];
+      const sp = st.spawns[(Number(s[0]) || 0) % st.spawns.length];
+      const off = s[1] ? 1.2 : 0;
       p.body = P.createBody(sp.x + off, sp.y + 0.05, sp.z + off);
       p.body.yaw = Math.atan2(-sp.x, -sp.z);
       p.body.frozen = 999;
-      p.ai = { think: 0, dirX: 0, dirZ: 0, sx: p.body.x, sz: p.body.z, stuckT: 0, detourT: 0, crawlT: 0, tagT: 0, wanderT: 0 };
+      p.ai = newAi(p.body);
+      p.buf = [];
       scene.add(p.ch.root);
       p.ch.update(p.body, 0);
     });
-    st.it = alive[Math.floor(Math.random() * alive.length)];
+    const it = st.byKey.get(ev.it);
+    st.it = it && it.alive ? it : alive[0];
     st.noBack = null;
     st.phase = 'countdown';
     st.t = 3;
@@ -179,13 +301,60 @@
     return pts;
   }
 
+  // ---------- other computers' players ----------
+  function onPos(key, a) {
+    if (!st) return;
+    const p = st.byKey.get(key);
+    if (!p || p.kind !== 'remote' || a[0] !== st.round) return;
+    for (let i = 1; i < 8; i++) if (typeof a[i] !== 'number' || !isFinite(a[i])) return;
+    p.buf.push({ t: performance.now() / 1000, x: a[1], y: a[2], z: a[3], yaw: a[4], speed: a[5], f: a[6] | 0, rs: a[7] | 0 });
+    if (p.buf.length > 30) p.buf.shift();
+  }
+  function snap(p) {
+    const b = p.body, r2 = (v) => Math.round(v * 100) / 100;
+    const f = (b.grounded ? 1 : 0) | (b.crawling ? 2 : 0) | (b.dashT > 0 || b.backT > 0 ? 4 : 0) | (b.frozen > 0 ? 8 : 0);
+    return [st.round, r2(b.x), r2(b.y), r2(b.z), r2(b.yaw), r2(b.speed || 0), f, p.rs];
+  }
+  // Show them a tiny bit in the past, sliding smoothly between the positions we got.
+  function updateRemote(p, dt) {
+    const buf = p.buf, B = p.body;
+    if (!buf.length) return;
+    const rt = performance.now() / 1000 - INTERP;
+    while (buf.length >= 2 && buf[1].t <= rt) buf.shift();
+    const a = buf[0], b = buf[1];
+    const px = B.x, pz = B.z;
+    let s = a;
+    if (b && rt > a.t && a.rs === b.rs) {
+      const k = Math.min(1, (rt - a.t) / Math.max(1e-3, b.t - a.t));
+      let dy = (b.yaw - a.yaw) % (Math.PI * 2);
+      if (dy > Math.PI) dy -= Math.PI * 2;
+      if (dy < -Math.PI) dy += Math.PI * 2;
+      B.x = a.x + (b.x - a.x) * k; B.y = a.y + (b.y - a.y) * k; B.z = a.z + (b.z - a.z) * k;
+      B.yaw = a.yaw + dy * k;
+      B.speed = a.speed + (b.speed - a.speed) * k;
+      s = k < 0.5 ? a : b;
+    } else {
+      if (b && a.rs !== b.rs && rt > a.t) s = b;
+      B.x = s.x; B.y = s.y; B.z = s.z; B.yaw = s.yaw; B.speed = s.speed;
+    }
+    if (dt > 0) { B.vx = B.vx * 0.7 + ((B.x - px) / dt) * 0.3; B.vz = B.vz * 0.7 + ((B.z - pz) / dt) * 0.3; }
+    B.grounded = !!(s.f & 1);
+    B.crawling = !!(s.f & 2);
+    B.dashT = s.f & 4 ? 0.1 : 0;
+    B.backT = 0;
+    B.frozen = s.f & 8 ? 1 : 0;
+  }
+
   // ---------- per frame ----------
   function update(dt) {
     if (!st) return;
     TG.Pad.poll();
     if (st.phase !== 'over' && (I.pressed('Escape') || TG.Pad.pressed(0, 9))) setPaused(!st.paused);
-    if (st.paused) return;
+    if (st.paused && !st.online) return; // online, the game keeps going while your menu is open
     st.time += dt;
+    while (st.inbox.length) applyEvent(st.inbox.shift());
+    if (!st.scene) return;
+    if (st.pending && (st.pendingT -= dt) <= 0) st.pending = false; // a lost message: try again
 
     if (st.phase === 'countdown') {
       st.t -= dt;
@@ -193,7 +362,7 @@
       if (n !== st.lastCount && n > 0) { st.lastCount = n; banner(String(n), 'count', 0.9); TG.Sound.play('countdown'); }
       if (st.t <= 0) {
         st.phase = 'play';
-        for (const p of alivePlayers()) p.body.frozen = p === st.it ? IT_HEADSTART : 0;
+        for (const p of alivePlayers()) if (p.kind !== 'remote') p.body.frozen = p === st.it ? IT_HEADSTART : 0;
         banner('GO!', 'go', 0.9);
         TG.Sound.play('go');
       }
@@ -201,12 +370,16 @@
       st.timeLeft -= dt;
       const s = Math.ceil(st.timeLeft);
       if (s <= 5 && s > 0 && s !== st.lastTick) { st.lastTick = s; TG.Sound.play('tick'); }
-      if (st.timeLeft <= 0) { st.timeLeft = 0; endRound(); }
+      if (st.timeLeft <= 0) {
+        st.timeLeft = 0;
+        if (st.host && !st.pending) { setPending(); send({ t: 'out', r: st.round, who: st.it.key }); }
+      }
     } else if (st.phase === 'roundEnd') {
       st.t -= dt;
-      if (st.t <= 0) {
-        if (alivePlayers().length <= 1) finish();
-        else startRound();
+      if (st.t <= 0 && st.host && !st.pending) {
+        const alive = alivePlayers();
+        if (alive.length <= 1) { setPending(); send({ t: 'win', who: alive[0].key }); }
+        else hostStartRound();
       }
     } else if (st.phase === 'over') {
       st.confettiT = (st.confettiT || 0) - dt;
@@ -218,23 +391,45 @@
     }
 
     for (const p of alivePlayers()) {
-      const inp = st.phase === 'over' ? {} : p.human ? humanInput(dt) : botInput(p, dt);
-      const mul = (p === st.it ? IT_BOOST : 1) * (p.human ? 1 : p.skill.speed);
-      P.step(p.body, inp, { colliders: st.colliders, gravity: st.gravity, speedMul: mul }, dt);
-      for (const e of p.body.events) {
-        if (e === 'fell') {
-          const sp = st.spawns[Math.floor(Math.random() * st.spawns.length)];
-          P.respawn(p.body, sp.x, sp.y + 0.05, sp.z, 1);
-          if (p.human) { TG.Sound.play('fell'); sub('Whoops! You fell off.', 1.5); }
-        } else if (p.human || (!st.human || !st.human.alive) && p === st.it) TG.Sound.play(e);
+      if (p.kind === 'remote') {
+        updateRemote(p, dt);
+      } else {
+        const inp = st.phase === 'over' ? {} : p.human ? (st.paused ? {} : humanInput(dt)) : botInput(p, dt);
+        const mul = (p === st.it ? IT_BOOST : 1) * (p.human ? 1 : p.skill.speed);
+        P.step(p.body, inp, { colliders: st.colliders, gravity: st.gravity, speedMul: mul }, dt);
+        for (const e of p.body.events) {
+          if (e === 'fell') {
+            const sp = st.spawns[Math.floor(Math.random() * st.spawns.length)];
+            P.respawn(p.body, sp.x, sp.y + 0.05, sp.z, 1);
+            p.rs++;
+            if (p.human) { TG.Sound.play('fell'); sub('Whoops! You fell off.', 1.5); }
+          } else if (p.human || (!st.human || !st.human.alive) && p === st.it) TG.Sound.play(e);
+        }
+        if (st.phase === 'over' && p === st.winner && p.body.grounded) { p.body.vy = 7; p.body.grounded = false; }
       }
-      if (st.phase === 'over' && p === st.winner && p.body.grounded) { p.body.vy = 7; p.body.grounded = false; }
       p.ch.update(p.body, dt);
       p.hat.update(dt);
     }
 
-    // IT tags by touching someone (no button)
-    if (st.phase === 'play' && st.it && st.it.alive && st.it.body.frozen <= 0) tryTag(st.it);
+    // IT tags by touching someone (no button). The host checks bots; your computer checks you.
+    st.claimT -= dt;
+    const it = st.it;
+    if (st.phase === 'play' && it && it.alive && !st.pending && it.kind !== 'remote' && it.body.frozen <= 0) {
+      const q = findTag(it);
+      if (q) {
+        if (st.host) hostTag(it, q);
+        else if (st.claimT <= 0) { st.claimT = 0.5; st.net.claim({ r: st.round, by: it.key, who: q.key }); }
+      }
+    }
+
+    // send where our players are
+    if (st.online && (st.sendT -= dt) <= 0) {
+      st.sendT = SEND_EVERY;
+      const out = {};
+      let any = false;
+      for (const p of alivePlayers()) if (p.kind !== 'remote') { out[p.key] = snap(p); any = true; }
+      if (any) st.net.sendPos(out);
+    }
 
     if (st.it && st.it.alive) {
       const b = st.it.body;
@@ -269,14 +464,16 @@
   function inReach(a, b) {
     return Math.hypot(a.x - b.x, a.z - b.z) <= TAG_H && Math.abs(a.y - b.y) <= TAG_V;
   }
-  function tryTag(p) {
+  function findTag(p) {
     let best = null, bd = Infinity;
     for (const q of alivePlayers()) {
       if (!canTag(p, q) || !inReach(p.body, q.body)) continue;
       const d = Math.hypot(p.body.x - q.body.x, p.body.z - q.body.z);
       if (d < bd) { bd = d; best = q; }
     }
-    if (!best) return false;
+    return best;
+  }
+  function applyTag(p, best) {
     st.it = best;
     best.body.frozen = TAG_FREEZE;
     st.noBack = { it: best, cannot: p, until: st.time + NO_TAG_BACK };
@@ -287,11 +484,9 @@
     else sub(`${p.name} tagged ${best.name}!`, 2);
     updateTags();
     refreshList();
-    return true;
   }
 
-  function endRound() {
-    const out = st.it;
+  function endRound(out) {
     out.alive = false;
     st.elim.push(out);
     st.scene.remove(out.ch.root);
@@ -306,8 +501,7 @@
     updateTags();
   }
 
-  function finish() {
-    const w = alivePlayers()[0];
+  function finish(w) {
     st.winner = w;
     st.phase = 'over';
     st.it = null;
@@ -635,5 +829,5 @@
     $('hud-spectate').hidden = !(st.human && !st.human.alive && st.phase !== 'over');
   }
 
-  TG.Game = { init, start, stop, update, render, resize, isActive: () => !!st, allMaps };
+  TG.Game = { init, start, stop, update, render, resize, isActive: () => !!st, allMaps, debug: () => st };
 })();
