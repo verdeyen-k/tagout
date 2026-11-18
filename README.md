@@ -14,7 +14,7 @@ A 3D tag game for 2–8 players. Whoever is IT when the timer runs out is OUT. T
 
 ## Maps
 
-Five maps: **the caves**, **space stares**, **the city**, **the feilds** and **the last chance**. They were all built with the game's own **🛠 Map Maker**, where you can make your own maps, test them, and save or export them.
+Six maps: **the caves**, **space stares**, **the city**, **the feilds**, **the last chance** and **shooter forever**. They were all built with the game's own **🛠 Map Maker**, where you can make your own maps, test them, and save or export them.
 
 ## For grown-ups / developers
 
