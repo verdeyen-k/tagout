@@ -105,7 +105,14 @@
         const yel = M('#ffe14d', { roughness: 0.5 });
         const cap = add(g, new THREE.SphereGeometry(0.17, 16, 10), yel, 0, 0.02, 0);
         cap.scale.y = 0.5;
-        add(g, new THREE.CylinderGeometry(0.035, 0.045, 0.14, 8), M('#6b4a1a'), 0, 0.12, 0);
+        // the peeled banana sticks up out of the peel, with a little curve
+        const fruit = new THREE.Group();
+        fruit.rotation.z = 0.18;
+        const cream = M('#fff1bf', { roughness: 0.7 });
+        add(fruit, new THREE.CylinderGeometry(0.1, 0.13, 0.5, 16), cream, 0, 0.27, 0);
+        add(fruit, new THREE.SphereGeometry(0.1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), cream, 0, 0.52, 0);
+        add(fruit, new THREE.CylinderGeometry(0.025, 0.035, 0.06, 8), M('#6b4a1a'), 0, 0.64, 0);
+        g.add(fruit);
         // 4 peel strips: each one bends over the top of the head, then hangs down and flares out a bit.
         const spot = M('#6b4a1a');
         const L1 = 0.3, L2 = 0.26;
@@ -125,7 +132,7 @@
           pivot.add(h1);
           g.add(pivot);
         }
-        height = 0.2;
+        height = 0.68;
         break;
       }
       case 'turtle': {
