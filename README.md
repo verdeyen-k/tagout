@@ -9,6 +9,7 @@ A 3D tag game for 2–8 players. Whoever is IT when the timer runs out is OUT. T
 - Press **▶ Play** to pick players, usernames, hats and bots (easy, normal or hard), the round length, and the map.
 - **WASD** to move · **Shift** to run · **Space** to jump (press again for a double jump) · **F** to dash · **Q** to back dash · **C** to crawl · **Z/X** or drag the mouse to turn the camera · **Esc** to pause.
 - When you're IT, just touch someone to tag them!
+- **🔥 Burning Battle** (pick it under **Mode**): IT is on fire and leaves a trail of fire behind them. Touch the fire and you're IT! When someone new is IT, the old fire goes out.
 - **🌐 Play online**: one person presses **Make a room** and tells their friends the 4-letter code. Friends press **Join a room** on their own computers. The person who made the room picks the bots, round length and map, then presses **GO!** Online, everyone is called by their color. If a friend leaves partway through, a bot takes over for them.
 - Gamepads work too: left stick to move, right stick for the camera, A to jump, B to dash, Y to back dash, RT to run, LT to crawl, Start to pause.
 

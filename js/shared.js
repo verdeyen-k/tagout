@@ -64,6 +64,7 @@
     place: () => tone(520, 760, 0.06, 'triangle', 0.06),
     remove: () => tone(420, 160, 0.09, 'triangle', 0.06),
     click: () => tone(700, 700, 0.03, 'square', 0.03),
+    burn: () => { tone(300, 60, 0.35, 'sawtooth', 0.07); tone(900, 200, 0.2, 'square', 0.04, 0.03); },
     tag: () => { tone(900, 300, 0.18, 'square', 0.07); tone(1200, 600, 0.12, 'square', 0.04, 0.05); },
     countdown: () => tone(440, 440, 0.15, 'square', 0.06),
     go: () => tone(880, 880, 0.3, 'square', 0.07),

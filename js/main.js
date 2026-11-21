@@ -14,7 +14,7 @@
   const SKILLS = ['easy', 'normal', 'hard'];
   function defaultSetup() {
     return {
-      count: 4, roundLen: 60, mapMode: 'rotate',
+      count: 4, roundLen: 60, mapMode: 'rotate', gameMode: 'classic',
       slots: TG.COLORS.map((c, i) => ({ name: i === 0 ? 'You' : c.name, hat: TG.HATS[(i % 8) + 1].id, ctrl: i === 0 ? 'you' : 'bot', skill: 'normal' })),
     };
   }
@@ -24,6 +24,7 @@
     d.count = Math.max(2, Math.min(8, Math.round(Number(s.count)) || d.count));
     if ([30, 45, 60, 90].includes(Number(s.roundLen))) d.roundLen = Number(s.roundLen);
     if (typeof s.mapMode === 'string') d.mapMode = s.mapMode;
+    if (s.gameMode === 'classic' || s.gameMode === 'burning') d.gameMode = s.gameMode;
     if (Array.isArray(s.slots)) s.slots.slice(0, 8).forEach((o, i) => {
       if (!o) return;
       if (typeof o.name === 'string' && o.name.trim()) d.slots[i].name = o.name.trim().slice(0, 12);
@@ -102,6 +103,7 @@
     $('su-count').textContent = setup.count;
     $('su-rounds').textContent = `${setup.count - 1} round${setup.count === 2 ? '' : 's'}`;
     $('su-len').value = String(setup.roundLen);
+    $('su-mode').value = setup.gameMode;
     $('su-map').innerHTML = mapOptions();
     $('su-map').value = setup.mapMode;
     if ($('su-map').value !== setup.mapMode) { setup.mapMode = 'rotate'; $('su-map').value = 'rotate'; }
@@ -120,7 +122,10 @@
       $('su-slots').querySelector(`[data-i="${i}"][data-k="skill"]`).value = s.skill;
     });
     const anyYou = setup.slots.slice(0, setup.count).some((s) => s.ctrl === 'you');
-    $('su-note').textContent = anyYou ? '' : 'No "You" player, so you will watch the bots play.';
+    const notes = [];
+    if (setup.gameMode === 'burning') notes.push('🔥 Burning Battle: IT leaves a trail of fire. Touch it and you\'re IT!');
+    if (!anyYou) notes.push('No "You" player, so you will watch the bots play.');
+    $('su-note').textContent = notes.join(' ');
     refreshLineup();
   }
 
@@ -140,12 +145,13 @@
   $('su-plus').addEventListener('click', () => { setup.count = Math.min(8, setup.count + 1); saveSetup(); renderSetup(); TG.Sound.play('click'); });
   $('su-len').addEventListener('change', (e) => { setup.roundLen = Number(e.target.value); saveSetup(); });
   $('su-map').addEventListener('change', (e) => { setup.mapMode = e.target.value; saveSetup(); });
+  $('su-mode').addEventListener('change', (e) => { setup.gameMode = e.target.value; saveSetup(); renderSetup(); });
   $('su-back').addEventListener('click', () => showCard('home'));
   $('su-start').addEventListener('click', (e) => {
     e.target.blur();
     const players = setup.slots.slice(0, setup.count).map((s, i) => ({ key: 'k' + i, kind: s.ctrl === 'you' ? 'me' : 'bot', name: s.name, hat: s.hat, ctrl: s.ctrl, skill: s.skill, color: TG.COLORS[i].hex }));
     TG.Sound.play('go');
-    TG.Main.startGame({ players, roundLen: setup.roundLen, mapMode: setup.mapMode });
+    TG.Main.startGame({ players, roundLen: setup.roundLen, mapMode: setup.mapMode, gameMode: setup.gameMode });
   });
 
   // ---------- online rooms ----------
@@ -212,13 +218,14 @@
       $('lb-bots').textContent = cfg.bots;
       $('lb-skill').value = cfg.skill;
       $('lb-len').value = String(cfg.roundLen);
+      $('lb-mode').value = cfg.mode;
       if (!$('lb-map').options.length) $('lb-map').innerHTML = mapOptions();
       $('lb-map').value = cfg.mapMode;
       if ($('lb-map').value !== cfg.mapMode) $('lb-map').value = 'rotate';
       $('lb-rounds').textContent = `${roster.length} players · ${Math.max(0, roster.length - 1)} rounds`;
       $('lb-cfg').textContent = roster.length < 2 ? 'You need at least 2 players. Wait for a friend or add a bot.' : '';
     } else {
-      $('lb-cfg').textContent = `${roster.length} players · ${cfg.roundLen} s rounds · ${mapLabel(cfg.mapMode)}`;
+      $('lb-cfg').textContent = `${cfg.mode === 'burning' ? '🔥 Burning Battle · ' : ''}${roster.length} players · ${cfg.roundLen} s rounds · ${mapLabel(cfg.mapMode)}`;
     }
     $('lb-hat').innerHTML = hatOptions();
     const me = room.me();
@@ -243,7 +250,7 @@
     }));
     mode = 'game';
     $('menu').hidden = true;
-    TG.Game.start({ players, roundLen: g.cfg.roundLen, mapMode: g.cfg.mapMode, cmap: g.cmap }, room);
+    TG.Game.start({ players, roundLen: g.cfg.roundLen, mapMode: g.cfg.mapMode, gameMode: g.cfg.mode, cmap: g.cmap }, room);
   }
 
   $('btn-online').addEventListener('click', (e) => { e.target.blur(); TG.Sound.play('click'); showOnline(); });
@@ -267,6 +274,7 @@
   $('lb-skill').addEventListener('change', (e) => hostCfg({ skill: e.target.value }));
   $('lb-len').addEventListener('change', (e) => hostCfg({ roundLen: Number(e.target.value) }));
   $('lb-map').addEventListener('change', (e) => hostCfg({ mapMode: e.target.value }));
+  $('lb-mode').addEventListener('change', (e) => hostCfg({ mode: e.target.value }));
   $('lb-start').addEventListener('click', (e) => {
     e.target.blur();
     if (!room || !room.isHost) return;

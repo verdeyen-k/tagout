@@ -15,6 +15,9 @@
   };
   const TAG_H = 1.2, TAG_V = 1.6, IT_BOOST = 1.06, TAG_FREEZE = 1.5, NO_TAG_BACK = 3, IT_HEADSTART = 2;
   const SEND_EVERY = 1 / 15, INTERP = 0.1;
+  // Burning Battle: how big each fire patch is, how far apart they're dropped,
+  // and how many seconds one burns before going out (Infinity = never goes out).
+  const FIRE_R = 0.55, FIRE_GAP = 0.7, FIRE_LIFE = 8;
 
   let renderer, canvas, camera;
   let st = null;
@@ -101,6 +104,7 @@
       human: players.find((p) => p.human) || null,
       time: 0, phase: 'none', paused: false, parts: [],
       scene: null, mapGroup: null,
+      burning: setup.gameMode === 'burning', trail: [], lastDrop: null, emberT: 0,
     };
     if (net) {
       net.openGame({
@@ -136,6 +140,7 @@
     if (st.mapGroup) MF.disposeGroup(st.mapGroup);
     for (const q of st.parts) st.scene.remove(q.m);
     st.parts = [];
+    clearTrail(false);
   }
 
   function shuffle(a) {
@@ -161,9 +166,10 @@
     setPending();
     send({ t: 'round', r, map: map.id, it: alive[Math.floor(Math.random() * alive.length)].key, spots });
   }
-  function hostTag(by, who) {
+  // fire = true when they got tagged by stepping in the fire trail
+  function hostTag(by, who, fire) {
     setPending();
-    send({ t: 'tag', r: st.round, by: by.key, who: who.key });
+    send({ t: 'tag', r: st.round, by: by.key, who: who.key, fire: !!fire });
   }
 
   function applyEvent(ev) {
@@ -173,7 +179,7 @@
         const c = ev.c || {};
         if (!st.host || st.pending || st.phase !== 'play' || c.r !== st.round || !st.it || st.it.key !== c.by) return;
         const q = st.byKey.get(c.who);
-        if (q && canTag(st.it, q)) hostTag(st.it, q);
+        if (q && canTag(st.it, q)) hostTag(st.it, q, !!c.fire);
         return;
       }
       case '_left': {
@@ -188,7 +194,7 @@
         if (st.phase === 'countdown') { st.phase = 'play'; st.t = 0; }
         if (st.phase !== 'play') return;
         st.pending = false;
-        applyTag(by, who);
+        applyTag(by, who, !!ev.fire);
         return;
       }
       case 'out': {
@@ -256,6 +262,15 @@
     st.itRing = ring;
     scene.add(st.itMark);
 
+    // Burning Battle: the flames that follow whoever is IT
+    st.fireMark = null;
+    st.trail = [];
+    st.lastDrop = null;
+    if (st.burning) {
+      st.fireMark = makeFlames();
+      scene.add(st.fireMark);
+    }
+
     const alive = alivePlayers();
     const spots = ev.spots || {};
     alive.forEach((p, i) => {
@@ -282,9 +297,10 @@
     view.yaw = (me ? me.body.yaw : st.it.body.yaw) + Math.PI;
     view.pitch = 0.35;
     updateTags();
-    $('hud-map').textContent = map.name;
+    $('hud-map').textContent = (st.burning ? '🔥 ' : '') + map.name;
     banner(`Round ${st.round} of ${st.totalRounds}`, '', 1.6);
-    sub(st.it === st.human ? "You're IT first! Touch someone to tag them!" : `${st.it.name} is IT. Run!`, 3);
+    if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
+    else sub(st.it === st.human ? "You're IT first! Touch someone to tag them!" : `${st.it.name} is IT. Run!`, 3);
     refreshList();
   }
 
@@ -422,6 +438,16 @@
       }
     }
 
+    // Burning Battle: stepping in IT's fire tags you. The host checks bots; your computer checks you.
+    if (st.burning && st.phase === 'play' && it && it.alive && !st.pending && st.trail.length) {
+      for (const q of alivePlayers()) {
+        if (q.kind === 'remote' || !canTag(it, q) || !touchingFire(q)) continue;
+        if (st.host) hostTag(it, q, true);
+        else if (st.claimT <= 0) { st.claimT = 0.5; st.net.claim({ r: st.round, by: it.key, who: q.key, fire: true }); }
+        break;
+      }
+    }
+
     // send where our players are
     if (st.online && (st.sendT -= dt) <= 0) {
       st.sendT = SEND_EVERY;
@@ -439,6 +465,7 @@
       st.itRing.scale.set(s, s, s);
     } else st.itMark.visible = false;
 
+    if (st.burning) updateFire(dt);
     updateParticles(dt);
     updateCamera(dt);
     updateHud(dt);
@@ -473,13 +500,18 @@
     }
     return best;
   }
-  function applyTag(p, best) {
+  function applyTag(p, best, fire) {
+    clearTrail(true); // a new IT: the old IT's fire goes out
     st.it = best;
     best.body.frozen = TAG_FREEZE;
     st.noBack = { it: best, cannot: p, until: st.time + NO_TAG_BACK };
-    burst(best.body.x, best.body.y + 1, best.body.z, ['#ff2a2a', '#ffd23f', '#ffffff'], 26, 6);
-    TG.Sound.play('tag');
-    if (best.human) { banner("You're IT!", 'it', 1.4); sub(`${p.name} got you. Go touch someone!`, 2.5); }
+    burst(best.body.x, best.body.y + 1, best.body.z, fire ? FIRE_COLORS : ['#ff2a2a', '#ffd23f', '#ffffff'], 26, 6);
+    TG.Sound.play(fire ? 'burn' : 'tag');
+    if (fire) {
+      if (best.human) { banner("🔥 You're IT!", 'it', 1.4); sub(`You stepped in ${p.name}'s fire. Now YOU'RE on fire!`, 2.5); }
+      else if (p.human) sub(`${best.name} stepped in your fire! Run!`, 2.5);
+      else sub(`${best.name} stepped in ${p.name}'s fire!`, 2);
+    } else if (best.human) { banner("You're IT!", 'it', 1.4); sub(`${p.name} got you. Go touch someone!`, 2.5); }
     else if (p.human) sub(`You tagged ${best.name}! Run!`, 2.5);
     else sub(`${p.name} tagged ${best.name}!`, 2);
     updateTags();
@@ -487,6 +519,7 @@
   }
 
   function endRound(out) {
+    clearTrail(true);
     out.alive = false;
     st.elim.push(out);
     st.scene.remove(out.ch.root);
@@ -670,6 +703,17 @@
     let dx = ai.dirX, dz = ai.dirZ;
     if (ai.detourT > 0) { ai.detourT -= dt; dx = ai.detX; dz = ai.detZ; }
 
+    // Burning Battle: runners steer around the fire, or jump over it if they can't
+    if (st.burning && p !== st.it && (dx || dz) && fireAhead(b, dx, dz)) {
+      const L = [-dz, dx], R = [dz, -dx];
+      const lOk = !fireAhead(b, L[0], L[1]), rOk = !fireAhead(b, R[0], R[1]);
+      if (lOk || rOk) {
+        const d = lOk && (!rOk || Math.random() < 0.5) ? L : R;
+        ai.detX = d[0]; ai.detZ = d[1]; ai.detourT = 0.4;
+        dx = d[0]; dz = d[1];
+      } else if (b.grounded) inp.jump = true;
+    }
+
     if (dx || dz) {
       const r = probe(b, dx, dz);
       if (r === 'crawl') ai.crawlT = 0.7;
@@ -791,6 +835,128 @@
       const s = Math.min(1, q.life * 2);
       q.m.scale.set(s, s, s);
     }
+  }
+
+  // ---------- Burning Battle: fire ----------
+  // Cone-shaped flames. translate() moves the cone so its bottom is at 0,
+  // so when we stretch it taller it grows UP instead of in both directions.
+  const flameGeo = new THREE.ConeGeometry(0.16, 0.6, 8);
+  flameGeo.translate(0, 0.3, 0);
+  const FIRE_COLORS = ['#ff3d00', '#ff8a00', '#ffd23f'];
+  // AdditiveBlending makes overlapping flames add up and look bright, like real fire.
+  const flameMats = FIRE_COLORS.map((c) => new THREE.MeshBasicMaterial({
+    color: c, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  const scorchGeo = new THREE.CircleGeometry(FIRE_R, 16);
+  const scorchMat = new THREE.MeshBasicMaterial({ color: 0x1a0a00, transparent: true, opacity: 0.55, depthWrite: false });
+
+  function addFlame(group, x, y, z, size) {
+    const f = new THREE.Mesh(flameGeo, flameMats[Math.floor(Math.random() * flameMats.length)]);
+    f.position.set(x, y, z);
+    f.userData.size = size;               // how big this flame is
+    f.userData.ph = Math.random() * 10;   // so every flame flickers at a different time
+    group.add(f);
+    return f;
+  }
+
+  // Make one flame flicker: wobble its height up and down over time.
+  function flicker(f, amount) {
+    const k = (0.75 + Math.sin(st.time * 18 + f.userData.ph) * 0.25) * f.userData.size * amount;
+    f.scale.set(k, k * 1.3, k);
+  }
+
+  // The flames all over whoever is IT (just for looks: they don't tag anyone).
+  function makeFlames() {
+    const g = new THREE.Group();
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      const r = 0.4 + (i % 2) * 0.08;
+      addFlame(g, Math.cos(a) * r, 0.2 + (i % 3) * 0.4, Math.sin(a) * r, 0.8 + Math.random() * 0.6);
+    }
+    addFlame(g, 0, 1.6, 0, 1.6); // a big one on top of the head
+    const light = new THREE.PointLight(0xff6a00, 1.6, 7);
+    light.position.y = 1;
+    g.add(light);
+    return g;
+  }
+
+  // One patch of fire on the ground, left behind by IT.
+  function makeFirePatch(x, y, z) {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    const scorch = new THREE.Mesh(scorchGeo, scorchMat);
+    scorch.rotation.x = -Math.PI / 2;
+    scorch.position.y = 0.03;
+    g.add(scorch);
+    for (let i = 0; i < 3; i++) addFlame(g, (Math.random() - 0.5) * 0.6, 0, (Math.random() - 0.5) * 0.6, 0.7 + Math.random() * 0.5);
+    st.scene.add(g);
+    return { g, x, y, z, born: st.time };
+  }
+
+  // Put out the whole fire trail. puff = show a little smoke where it was.
+  function clearTrail(puff) {
+    if (!st) return;
+    st.trail.forEach((s, i) => {
+      if (st.scene) st.scene.remove(s.g);
+      if (puff && i % 3 === 0) burst(s.x, s.y + 0.4, s.z, ['#555555', '#888888'], 2, 2, -2);
+    });
+    st.trail = [];
+    st.lastDrop = null;
+  }
+
+  function updateFire(dt) {
+    const it = st.it && st.it.alive ? st.it : null;
+    st.fireMark.visible = !!it;
+    if (it) {
+      const b = it.body;
+      // the flames follow IT around (squashed down when crawling)
+      st.fireMark.position.set(b.x, b.y, b.z);
+      st.fireMark.scale.set(1, b.crawling ? 0.55 : 1, 1);
+      for (const f of st.fireMark.children) if (f.userData.size) flicker(f, 1);
+      // little sparks floating up (negative gravity makes them rise)
+      st.emberT -= dt;
+      if (st.emberT <= 0) {
+        st.emberT = 0.05;
+        burst(b.x + (Math.random() - 0.5) * 0.8, b.y + 1, b.z + (Math.random() - 0.5) * 0.8, FIRE_COLORS, 1, 1.5, -3);
+      }
+      // drop a fire patch every time IT has moved FIRE_GAP away from the last one
+      if (st.phase === 'play' && b.grounded && b.frozen <= 0) {
+        const L = st.lastDrop;
+        if (!L || Math.hypot(b.x - L.x, b.z - L.z) >= FIRE_GAP || Math.abs(b.y - L.y) > 0.5) {
+          st.trail.push(makeFirePatch(b.x, b.y, b.z));
+          st.lastDrop = { x: b.x, y: b.y, z: b.z };
+        }
+      }
+    }
+    // make the trail flicker, and let old patches burn out
+    for (let i = st.trail.length - 1; i >= 0; i--) {
+      const s = st.trail[i];
+      const age = st.time - s.born;
+      if (age > FIRE_LIFE) { st.scene.remove(s.g); st.trail.splice(i, 1); continue; }
+      const grow = Math.min(1, age * 4);                  // new flames pop up
+      const fade = Math.min(1, (FIRE_LIFE - age) / 1);    // dying flames shrink in their last second
+      for (const f of s.g.children) if (f.userData.size) flicker(f, grow * fade);
+    }
+  }
+
+  // Is this player standing in the fire?
+  function touchingFire(q) {
+    const b = q.body, reach = FIRE_R + P.C.radius;
+    for (const s of st.trail) {
+      if (Math.hypot(b.x - s.x, b.z - s.z) <= reach && b.y >= s.y - 0.5 && b.y <= s.y + 1.2) return true;
+    }
+    return false;
+  }
+
+  // For bots: is there fire a little way ahead in this direction?
+  function fireAhead(b, dx, dz) {
+    for (const d of [0.9, 1.8]) {
+      const x = b.x + dx * d, z = b.z + dz * d;
+      for (const s of st.trail) {
+        if (Math.hypot(x - s.x, z - s.z) < FIRE_R + 0.6 && Math.abs(b.y - s.y) < 1.5) return true;
+      }
+    }
+    return false;
   }
 
   // ---------- HUD ----------
