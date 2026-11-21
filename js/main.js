@@ -101,7 +101,7 @@
 
   // "3 rounds", or for Treasure Time how big the teams are
   function roundsText(mode, n) {
-    if (mode === 'treasure') { const k = TG.Game.itsFor(n); return `${k} IT${k === 1 ? '' : 's'} vs ${n - k} runner${n - k === 1 ? '' : 's'}`; }
+    if (mode === 'treasure') { const k = TG.Game.itsFor(n), r = TG.Game.treasureRounds(n); return `${k} IT${k === 1 ? '' : 's'} vs ${n - k} runner${n - k === 1 ? '' : 's'} · ${r} rounds`; }
     return `${n - 1} round${n === 2 ? '' : 's'}`;
   }
 

@@ -21,6 +21,7 @@
   // Treasure Time: how close a runner must get to grab the treasure, and how many players are ITs.
   const TREASURE_R = 1.3;
   const itsFor = (n) => Math.max(1, Math.floor(n / 2)); // half are ITs: 2-3 players: 1 IT, 4-5: 2, 6-7: 3, 8: 4
+  const treasureRounds = (n) => Math.max(2, n - 1);     // how many rounds a Treasure Time match has
 
   let renderer, canvas, camera;
   let st = null;
@@ -134,7 +135,8 @@
       burning: setup.gameMode === 'burning', trail: [], lastDrop: null, emberT: 0,
       treasure: setup.gameMode === 'treasure', its: [], treasurePos: null, chest: null,
     };
-    if (st.treasure) st.totalRounds = 1; // one match: ITs vs runners
+    if (st.treasure) st.totalRounds = treasureRounds(players.length);
+    for (const p of players) p.score = 0; // Treasure Time points
     if (net) {
       net.openGame({
         event: (ev) => { if (st) st.inbox.push(ev); },
@@ -213,9 +215,11 @@
     const near = sp.map((s, i) => i).filter((i) => i !== ti).sort((a, b) => dist(sp[a], T) - dist(sp[b], T));
     if (!near.length) near.push(ti);
     const far = near.slice().reverse();
-    // shuffle everyone, then the first few are the ITs
-    const all = shuffle(alivePlayers().slice());
+    // New teams every round. The players who've been IT the fewest times go first, so everyone gets turns.
+    st.itTurns = st.itTurns || {};
+    const all = shuffle(alivePlayers().slice()).sort((a, b) => (st.itTurns[a.key] || 0) - (st.itTurns[b.key] || 0));
     const its = all.slice(0, itsFor(all.length)), runners = all.slice(its.length);
+    for (const p of its) st.itTurns[p.key] = (st.itTurns[p.key] || 0) + 1;
     const spots = {};
     its.forEach((p, i) => { spots[p.key] = [ti, i % 2]; });   // ITs start right at the treasure
     runners.forEach((p, i) => { spots[p.key] = [far[i % far.length], i >= far.length ? 1 : 0]; }); // runners start far away
@@ -282,9 +286,15 @@
         return;
       }
       case 'tend': { // Treasure Time is over: team 'runners' (grabbed it) or 'its' (time ran out)
-        if (!st.treasure || ev.r !== st.round || st.phase === 'over') return;
+        if (!st.treasure || ev.r !== st.round || st.phase !== 'play') return;
         st.pending = false;
-        finishTreasure(ev.team === 'runners' ? 'runners' : 'its', st.byKey.get(ev.who) || null);
+        endTreasureRound(ev.team === 'runners' ? 'runners' : 'its', st.byKey.get(ev.who) || null);
+        return;
+      }
+      case 'tover': { // Treasure Time: all the rounds are done
+        if (!st.treasure || st.phase === 'over') return;
+        st.pending = false;
+        finishTreasureGame();
         return;
       }
       case 'bot': {
@@ -390,7 +400,7 @@
     updateTags();
     $('hud-map').textContent = (st.burning ? '🔥 ' : '') + map.name;
     if (st.treasure) {
-      banner('💰 Treasure Time!', '', 1.8);
+      banner(`💰 Round ${st.round} of ${st.totalRounds}`, '', 1.8);
       if (!st.human) sub('Runners: grab the treasure! ITs: guard it!', 4);
       else if (isIt(st.human)) sub("You're on the IT team. Guard the treasure! Touch runners to send them home.", 4);
       else sub("You're a runner. Follow the light and grab the treasure before time runs out!", 4);
@@ -494,7 +504,10 @@
       st.t -= dt;
       if (st.t <= 0 && st.host && !st.pending) {
         const alive = alivePlayers();
-        if (alive.length <= 1) { setPending(); send({ t: 'win', who: alive[0].key }); }
+        if (st.treasure) {
+          if (st.round >= st.totalRounds) { setPending(); send({ t: 'tover' }); }
+          else hostStartRound();
+        } else if (alive.length <= 1) { setPending(); send({ t: 'win', who: alive[0].key }); }
         else hostStartRound();
       }
     } else if (st.phase === 'over') {
@@ -703,25 +716,44 @@
     else sub(`${by.name} sent ${who.name} home!`, 1.6);
   }
 
-  function finishTreasure(team, who) {
-    st.phase = 'over';
+  // A Treasure Time round is over: everyone on the winning team gets a point.
+  function endTreasureRound(team, who) {
     const winners = st.players.filter((p) => isIt(p) === (team === 'its'));
-    const losers = st.players.filter((p) => !winners.includes(p));
+    for (const p of winners) p.score++;
     const meWon = !!st.human && winners.includes(st.human);
-    st.winner = meWon ? st.human : who || winners[0];
-    TG.Sound.play('win');
+    TG.Sound.play(meWon || !st.human ? 'win' : 'elim');
     if (team === 'runners') {
       const T = st.treasurePos;
       burst(T.x, T.y + 1, T.z, ['#ffd23f', '#fff3a0', '#ffffff'], 70, 10);
-      banner(meWon ? 'YOUR TEAM WINS!' : 'THE RUNNERS WIN!', 'win', 99);
-      sub(`${who ? who.name : 'A runner'} grabbed the treasure!`, 4);
+      banner(meWon ? 'YOUR TEAM WINS!' : 'THE RUNNERS WIN!', 'win', 2.8);
+      sub(`${who ? who.name : 'A runner'} grabbed the treasure! +1 point for each runner.`, 3.2);
     } else {
-      banner(meWon ? 'YOUR TEAM WINS!' : 'THE ITs WIN!', 'win', 99);
-      sub('Time ran out. The treasure is safe!', 4);
+      banner(meWon ? 'YOUR TEAM WINS!' : 'THE ITs WIN!', 'win', 2.8);
+      sub('Time ran out. The treasure is safe! +1 point for each IT.', 3.2);
     }
-    $('results').querySelector('h2').textContent = team === 'runners' ? '🏆 Runners win!' : '🏆 ITs win!';
-    const row = (p, won) => `<li style="--c:${p.color}"><b>${won ? '🏆' : ''}</b><span class="dot"></span>${esc(p.name)} <small>${isIt(p) ? 'IT' : 'runner'}</small>${p.human ? ' <em>(you)</em>' : ''}</li>`;
-    $('results-list').innerHTML = winners.map((p) => row(p, true)).join('') + losers.map((p) => row(p, false)).join('');
+    st.phase = 'roundEnd';
+    st.t = 3.5;
+    refreshList();
+  }
+
+  // All the rounds are done: most points wins.
+  function finishTreasureGame() {
+    st.phase = 'over';
+    const rank = st.players.slice().sort((a, b) => b.score - a.score);
+    const top = rank[0].score;
+    const champs = rank.filter((p) => p.score === top);
+    st.winner = st.human && champs.includes(st.human) ? st.human : champs[0];
+    st.its = []; // nobody is IT any more
+    for (const p of st.players) if (p.ring) { p.ch.root.remove(p.ring); p.ring = null; }
+    updateTags();
+    TG.Sound.play('win');
+    if (champs.length > 1) banner(champs.includes(st.human) ? 'YOU TIED!' : "IT'S A TIE!", 'win', 99);
+    else banner(champs[0].human ? 'YOU WIN!' : `${champs[0].name} WINS!`, 'win', 99);
+    sub(`${champs.map((p) => p.name).join(' and ')} got the most points: ${top}`, 4);
+    $('results').querySelector('h2').textContent = '💰 Final points';
+    $('results-list').innerHTML = rank.map((p, i) =>
+      `<li style="--c:${p.color}"><b>${p.score === top ? '🏆' : i + 1}</b><span class="dot"></span>${esc(p.name)} <small>${p.score} point${p.score === 1 ? '' : 's'}</small>${p.human ? ' <em>(you)</em>' : ''}</li>`).join('');
+    refreshList();
     setTimeout(() => { if (st && st.phase === 'over') { unlockMouse(); $('results').hidden = false; } }, 2200);
   }
 
@@ -1267,7 +1299,7 @@
   }
   function refreshList() {
     $('hud-players').innerHTML = st.players.map((p) =>
-      `<li class="${p.alive ? '' : 'out'} ${isIt(p) ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${isIt(p) ? ' <b>IT</b>' : ''}</li>`).join('');
+      `<li class="${p.alive ? '' : 'out'} ${isIt(p) ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${isIt(p) ? ' <b>IT</b>' : ''}${st.treasure ? ` <small>${p.score} pt${p.score === 1 ? '' : 's'}</small>` : ''}</li>`).join('');
   }
   function updateHud(dt) {
     if (bannerT > 0 && (bannerT -= dt) <= 0) $('banner').className = '';
@@ -1275,7 +1307,7 @@
     const t = Math.max(0, Math.ceil(st.timeLeft));
     $('hud-time').textContent = Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
     $('hud-time').classList.toggle('low', st.phase === 'play' && t <= 5);
-    $('hud-round').textContent = st.treasure ? '💰 Treasure Time' : `Round ${st.round}/${st.totalRounds}`;
+    $('hud-round').textContent = `${st.treasure ? '💰 ' : ''}Round ${st.round}/${st.totalRounds}`;
     const me = st.human && st.human.alive ? st.human : null;
     $('game-ui').classList.toggle('you-it', !!me && isIt(me));
     $('hud-me').hidden = !me;
@@ -1289,5 +1321,5 @@
     $('hud-lock').hidden = isLocked() || st.paused || st.phase === 'over';
   }
 
-  TG.Game = { init, start, stop, update, render, resize, isActive: () => !!st, allMaps, itsFor, debug: () => st };
+  TG.Game = { init, start, stop, update, render, resize, isActive: () => !!st, allMaps, itsFor, treasureRounds, debug: () => st };
 })();
