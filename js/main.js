@@ -24,7 +24,7 @@
     d.count = Math.max(2, Math.min(8, Math.round(Number(s.count)) || d.count));
     if ([30, 45, 60, 90].includes(Number(s.roundLen))) d.roundLen = Number(s.roundLen);
     if (typeof s.mapMode === 'string') d.mapMode = s.mapMode;
-    if (s.gameMode === 'classic' || s.gameMode === 'burning') d.gameMode = s.gameMode;
+    if (['classic', 'burning', 'treasure'].includes(s.gameMode)) d.gameMode = s.gameMode;
     if (Array.isArray(s.slots)) s.slots.slice(0, 8).forEach((o, i) => {
       if (!o) return;
       if (typeof o.name === 'string' && o.name.trim()) d.slots[i].name = o.name.trim().slice(0, 12);
@@ -99,9 +99,15 @@
   }
   function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+  // "3 rounds", or for Treasure Time how big the teams are
+  function roundsText(mode, n) {
+    if (mode === 'treasure') { const k = TG.Game.itsFor(n); return `${k} IT${k === 1 ? '' : 's'} vs ${n - k} runner${n - k === 1 ? '' : 's'}`; }
+    return `${n - 1} round${n === 2 ? '' : 's'}`;
+  }
+
   function renderSetup() {
     $('su-count').textContent = setup.count;
-    $('su-rounds').textContent = `${setup.count - 1} round${setup.count === 2 ? '' : 's'}`;
+    $('su-rounds').textContent = roundsText(setup.gameMode, setup.count);
     $('su-len').value = String(setup.roundLen);
     $('su-mode').value = setup.gameMode;
     $('su-map').innerHTML = mapOptions();
@@ -124,6 +130,7 @@
     const anyYou = setup.slots.slice(0, setup.count).some((s) => s.ctrl === 'you');
     const notes = [];
     if (setup.gameMode === 'burning') notes.push('🔥 Burning Battle: IT leaves a trail of fire. Touch it and you\'re IT!');
+    if (setup.gameMode === 'treasure') notes.push('💰 Treasure Time: the ITs guard the treasure. Runners win if one of them grabs it before time runs out. Tagged runners go back to their spawn.');
     if (!anyYou) notes.push('No "You" player, so you will watch the bots play.');
     $('su-note').textContent = notes.join(' ');
     refreshLineup();
@@ -222,10 +229,10 @@
       if (!$('lb-map').options.length) $('lb-map').innerHTML = mapOptions();
       $('lb-map').value = cfg.mapMode;
       if ($('lb-map').value !== cfg.mapMode) $('lb-map').value = 'rotate';
-      $('lb-rounds').textContent = `${roster.length} players · ${Math.max(0, roster.length - 1)} rounds`;
+      $('lb-rounds').textContent = `${roster.length} players · ${roundsText(cfg.mode, roster.length)}`;
       $('lb-cfg').textContent = roster.length < 2 ? 'You need at least 2 players. Wait for a friend or add a bot.' : '';
     } else {
-      $('lb-cfg').textContent = `${cfg.mode === 'burning' ? '🔥 Burning Battle · ' : ''}${roster.length} players · ${cfg.roundLen} s rounds · ${mapLabel(cfg.mapMode)}`;
+      $('lb-cfg').textContent = `${cfg.mode === 'burning' ? '🔥 Burning Battle · ' : cfg.mode === 'treasure' ? '💰 Treasure Time · ' : ''}${roster.length} players · ${cfg.roundLen} s rounds · ${mapLabel(cfg.mapMode)}`;
     }
     $('lb-hat').innerHTML = hatOptions();
     const me = room.me();

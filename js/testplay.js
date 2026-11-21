@@ -27,10 +27,12 @@
     ui.status = document.getElementById('play-status');
     ui.root.hidden = false;
     I.clear();
+    lockMouse();
   }
 
   function stop() {
     if (!st) return;
+    if (document.pointerLockElement) try { document.exitPointerLock(); } catch (_) { /* ok */ }
     st.opts.scene.remove(st.ch.root);
     st.ch.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     ui.root.hidden = true;
@@ -40,13 +42,24 @@
     if (done) done();
   }
 
+  const isLocked = () => !!st && document.pointerLockElement === st.opts.canvas;
+  function lockMouse() {
+    try { const r = st.opts.canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (_) { /* ok */ }
+  }
+  // Esc gives the mouse back (the browser does that): that also ends test play, like Esc always did.
+  document.addEventListener('pointerlockchange', () => {
+    if (st && st.wasLocked && !isLocked()) stop();
+    else if (st) st.wasLocked = isLocked();
+  });
+
   function onPointer(type, e) {
     if (!st) return;
-    if (type === 'down') st.drag = true;
+    if (type === 'down') { st.drag = true; if (!isLocked()) lockMouse(); }
     else if (type === 'up') st.drag = false;
-    else if (type === 'move' && st.drag) {
-      st.camYaw -= e.movementX * 0.006;
-      st.camPitch = Math.max(-0.25, Math.min(1.25, st.camPitch + e.movementY * 0.004));
+    else if (type === 'move' && (st.drag || isLocked())) {
+      const k = isLocked() ? 0.0035 : 0.006;
+      st.camYaw -= e.movementX * k;
+      st.camPitch = Math.max(-0.25, Math.min(1.25, st.camPitch + e.movementY * k * 0.7));
     }
   }
 

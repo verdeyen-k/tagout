@@ -11,6 +11,8 @@
     backSpeed: 19, backTime: 0.16, backCd: 1.1,
     stamina: 3.0, staminaRefill: 2.5,
     stepUp: 0.45, fallY: -25, coyote: 0.1, maxFall: 45,
+    // true = everyone always runs and never gets tired. false = hold Shift to run, and stamina runs out.
+    alwaysRun: true,
   };
   C.jumpV = Math.sqrt(2 * C.baseG * C.jumpH);
   C.djumpV = Math.sqrt(2 * C.baseG * C.djumpH);
@@ -124,9 +126,11 @@
     if (len > 1) { mx /= len; mz /= len; len = 1; }
     const moving = len > 0.1;
 
-    // running uses stamina; when it runs out you must fully recover
-    const wantRun = inp.run && moving && !b.crawling && !b.exhausted;
-    if (wantRun) {
+    // running uses stamina; when it runs out you must fully recover (unless alwaysRun is on)
+    const wantRun = (inp.run || C.alwaysRun) && moving && !b.crawling && !b.exhausted;
+    if (C.alwaysRun) {
+      b.stamina = C.stamina;
+    } else if (wantRun) {
       b.stamina -= dt;
       if (b.stamina <= 0) { b.stamina = 0; b.exhausted = true; }
     } else {

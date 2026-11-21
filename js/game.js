@@ -18,6 +18,9 @@
   // Burning Battle: how big each fire patch is, how far apart they're dropped,
   // and how many seconds one burns before going out (Infinity = never goes out).
   const FIRE_R = 0.55, FIRE_GAP = 0.7, FIRE_LIFE = 8;
+  // Treasure Time: how close a runner must get to grab the treasure, and how many players are ITs.
+  const TREASURE_R = 1.3;
+  const itsFor = (n) => Math.max(1, Math.floor(n / 2)); // half are ITs: 2-3 players: 1 IT, 4-5: 2, 6-7: 3, 8: 4
 
   let renderer, canvas, camera;
   let st = null;
@@ -28,13 +31,28 @@
   function init(r, cvs) {
     renderer = r; canvas = cvs;
     camera = new THREE.PerspectiveCamera(65, 1, 0.1, 1500);
-    canvas.addEventListener('pointerdown', (e) => { if (st) { view.drag = true; try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* ok */ } } });
+    // always running: no stamina bars, and no "Shift run" in the help
+    if (P.C.alwaysRun) for (const el of document.querySelectorAll('.stamina, .run-key')) el.style.display = 'none';
+    // Click the game to "lock" the mouse: the cursor hides and moving the mouse turns the camera.
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!st) return;
+      if (!isLocked()) lockMouse();
+      view.drag = true;
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* ok */ }
+    });
     canvas.addEventListener('pointerup', () => { view.drag = false; });
     canvas.addEventListener('pointercancel', () => { view.drag = false; });
     canvas.addEventListener('pointermove', (e) => {
-      if (!st || !view.drag || st.paused) return;
-      view.yaw -= (e.movementX || 0) * 0.006;
-      view.pitch = Math.max(-0.2, Math.min(1.2, view.pitch + (e.movementY || 0) * 0.004));
+      const locked = isLocked();
+      // locked: any mouse move turns the camera. Not locked: only while dragging (the old way).
+      if (!st || st.paused || !(locked || view.drag)) return;
+      const k = locked ? 0.0035 : 0.006;
+      view.yaw -= (e.movementX || 0) * k;
+      view.pitch = Math.max(-0.2, Math.min(1.2, view.pitch + (e.movementY || 0) * k * 0.7));
+    });
+    // Esc gives the mouse back (the browser does that). When that happens mid-game, pause.
+    document.addEventListener('pointerlockchange', () => {
+      if (!isLocked() && st && !st.paused && st.phase !== 'over') setPaused(true);
     });
     $('btn-resume').addEventListener('click', () => setPaused(false));
     $('btn-quit').addEventListener('click', () => { stop(); TG.Main.showMenu(); });
@@ -46,6 +64,15 @@
     $('btn-results-menu').addEventListener('click', () => { stop(); TG.Main.showMenu(); });
   }
   function resize(a) { camera.aspect = a; camera.updateProjectionMatrix(); }
+
+  const isLocked = () => document.pointerLockElement === canvas;
+  function lockMouse() {
+    // the browser only allows this right after a click or key press, so it can fail: that's fine
+    try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (_) { /* ok */ }
+  }
+  function unlockMouse() {
+    if (isLocked()) try { document.exitPointerLock(); } catch (_) { /* ok */ }
+  }
 
   // ---------- maps ----------
   function allMaps() {
@@ -105,7 +132,9 @@
       time: 0, phase: 'none', paused: false, parts: [],
       scene: null, mapGroup: null,
       burning: setup.gameMode === 'burning', trail: [], lastDrop: null, emberT: 0,
+      treasure: setup.gameMode === 'treasure', its: [], treasurePos: null, chest: null,
     };
+    if (st.treasure) st.totalRounds = 1; // one match: ITs vs runners
     if (net) {
       net.openGame({
         event: (ev) => { if (st) st.inbox.push(ev); },
@@ -120,11 +149,13 @@
     $('btn-again').textContent = net ? 'Back to the room' : 'Play again';
     $('btn-quit').textContent = net ? 'Leave the room' : 'Quit to menu';
     I.clear();
+    lockMouse(); // works when the game was started by clicking GO!
     if (st.host) hostStartRound();
   }
 
   function stop() {
     if (!st) return;
+    unlockMouse();
     if (st.net) st.net.closeGame();
     clearScene();
     for (const p of st.players) p.ch.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.map) o.material.map.dispose(); });
@@ -141,6 +172,7 @@
     for (const q of st.parts) st.scene.remove(q.m);
     st.parts = [];
     clearTrail(false);
+    for (const p of st.players) if (p.ring) { p.ch.root.remove(p.ring); p.ring = null; }
   }
 
   function shuffle(a) {
@@ -158,6 +190,7 @@
   function hostStartRound() {
     const r = st.round + 1;
     const map = pickMap(r);
+    if (st.treasure) { hostStartTreasure(r, map); return; }
     const n = spawnsFor(map).length;
     const alive = alivePlayers();
     const order = shuffle([...Array(n).keys()]);
@@ -167,6 +200,29 @@
     send({ t: 'round', r, map: map.id, it: alive[Math.floor(Math.random() * alive.length)].key, spots });
   }
   // fire = true when they got tagged by stepping in the fire trail
+  // Treasure Time: pick the teams, where the treasure goes, and where everyone starts.
+  function hostStartTreasure(r, map) {
+    const sp = spawnsFor(map);
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+    // the treasure goes on one of the lowest spawn points, so it's easy to reach
+    const lowY = Math.min(...sp.map((s) => s.y));
+    const low = sp.map((s, i) => i).filter((i) => sp[i].y <= lowY + 2.5);
+    const ti = low[Math.floor(Math.random() * low.length)];
+    const T = sp[ti];
+    // the other spawn points, from closest to the treasure to farthest
+    const near = sp.map((s, i) => i).filter((i) => i !== ti).sort((a, b) => dist(sp[a], T) - dist(sp[b], T));
+    if (!near.length) near.push(ti);
+    const far = near.slice().reverse();
+    // shuffle everyone, then the first few are the ITs
+    const all = shuffle(alivePlayers().slice());
+    const its = all.slice(0, itsFor(all.length)), runners = all.slice(its.length);
+    const spots = {};
+    its.forEach((p, i) => { spots[p.key] = [ti, i % 2]; });   // ITs start right at the treasure
+    runners.forEach((p, i) => { spots[p.key] = [far[i % far.length], i >= far.length ? 1 : 0]; }); // runners start far away
+    setPending();
+    send({ t: 'round', r, map: map.id, it: its[0].key, its: its.map((p) => p.key), treasure: ti, spots });
+  }
+
   function hostTag(by, who, fire) {
     setPending();
     send({ t: 'tag', r: st.round, by: by.key, who: who.key, fire: !!fire });
@@ -177,6 +233,13 @@
     switch (ev.t) {
       case '_claim': {
         const c = ev.c || {};
+        if (c.treasure) { // Treasure Time: another computer says "I sent a runner home" or "I grabbed the treasure"
+          if (!st.host || !st.treasure || st.pending || st.phase !== 'play' || c.r !== st.round) return;
+          const by = st.byKey.get(c.by), who = st.byKey.get(c.who);
+          if (c.t === 'home' && by && who && isIt(by) && !isIt(who)) { setPending(); send({ t: 'home', r: st.round, by: by.key, who: who.key }); }
+          if (c.t === 'tend' && who && !isIt(who)) { setPending(); send({ t: 'tend', r: st.round, team: 'runners', who: who.key }); }
+          return;
+        }
         if (!st.host || st.pending || st.phase !== 'play' || c.r !== st.round || !st.it || st.it.key !== c.by) return;
         const q = st.byKey.get(c.who);
         if (q && canTag(st.it, q)) hostTag(st.it, q, !!c.fire);
@@ -209,6 +272,19 @@
         if (!p || st.phase === 'over') return;
         st.pending = false;
         finish(p);
+        return;
+      }
+      case 'home': { // Treasure Time: an IT touched a runner
+        const by = st.byKey.get(ev.by), who = st.byKey.get(ev.who);
+        if (!st.treasure || ev.r !== st.round || !by || !who || st.phase !== 'play') return;
+        st.pending = false;
+        sendHome(by, who);
+        return;
+      }
+      case 'tend': { // Treasure Time is over: team 'runners' (grabbed it) or 'its' (time ran out)
+        if (!st.treasure || ev.r !== st.round || st.phase === 'over') return;
+        st.pending = false;
+        finishTreasure(ev.team === 'runners' ? 'runners' : 'its', st.byKey.get(ev.who) || null);
         return;
       }
       case 'bot': {
@@ -278,6 +354,7 @@
       const sp = st.spawns[(Number(s[0]) || 0) % st.spawns.length];
       const off = s[1] ? 1.2 : 0;
       p.body = P.createBody(sp.x + off, sp.y + 0.05, sp.z + off);
+      p.home = { x: sp.x + off, y: sp.y, z: sp.z + off }; // where you go back to when you're sent home
       p.body.yaw = Math.atan2(-sp.x, -sp.z);
       p.body.frozen = 999;
       p.ai = newAi(p.body);
@@ -287,6 +364,20 @@
     });
     const it = st.byKey.get(ev.it);
     st.it = it && it.alive ? it : alive[0];
+    st.its = [];
+    st.chest = null;
+    if (st.treasure) {
+      // a whole team of ITs instead of just one
+      st.its = (Array.isArray(ev.its) ? ev.its : []).map((k) => st.byKey.get(k)).filter((p) => p && p.alive);
+      if (!st.its.length) st.its = [st.it];
+      st.it = null;
+      for (const p of st.its) { p.ring = makeItRing(); p.ch.root.add(p.ring); }
+      const T = st.spawns[(Number(ev.treasure) || 0) % st.spawns.length];
+      st.treasurePos = { x: T.x, y: T.y, z: T.z };
+      st.chest = makeTreasure();
+      st.chest.position.set(T.x, T.y, T.z);
+      scene.add(st.chest);
+    }
     st.noBack = null;
     st.phase = 'countdown';
     st.t = 3;
@@ -294,12 +385,17 @@
     st.timeLeft = st.setup.roundLen;
     st.lastTick = 99;
     const me = st.human && st.human.alive ? st.human : null;
-    view.yaw = (me ? me.body.yaw : st.it.body.yaw) + Math.PI;
+    view.yaw = (me || st.it || st.its[0]).body.yaw + Math.PI;
     view.pitch = 0.35;
     updateTags();
     $('hud-map').textContent = (st.burning ? '🔥 ' : '') + map.name;
-    banner(`Round ${st.round} of ${st.totalRounds}`, '', 1.6);
-    if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
+    if (st.treasure) {
+      banner('💰 Treasure Time!', '', 1.8);
+      if (!st.human) sub('Runners: grab the treasure! ITs: guard it!', 4);
+      else if (isIt(st.human)) sub("You're on the IT team. Guard the treasure! Touch runners to send them home.", 4);
+      else sub("You're a runner. Follow the light and grab the treasure before time runs out!", 4);
+    } else banner(`Round ${st.round} of ${st.totalRounds}`, '', 1.6);
+    if (st.treasure) { /* messages above */ } else if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
     else sub(st.it === st.human ? "You're IT first! Touch someone to tag them!" : `${st.it.name} is IT. Run!`, 3);
     refreshList();
   }
@@ -388,7 +484,11 @@
       if (s <= 5 && s > 0 && s !== st.lastTick) { st.lastTick = s; TG.Sound.play('tick'); }
       if (st.timeLeft <= 0) {
         st.timeLeft = 0;
-        if (st.host && !st.pending) { setPending(); send({ t: 'out', r: st.round, who: st.it.key }); }
+        if (st.host && !st.pending) {
+          setPending();
+          // Treasure Time: time ran out, so the ITs kept the treasure safe
+          send(st.treasure ? { t: 'tend', r: st.round, team: 'its' } : { t: 'out', r: st.round, who: st.it.key });
+        }
       }
     } else if (st.phase === 'roundEnd') {
       st.t -= dt;
@@ -411,11 +511,11 @@
         updateRemote(p, dt);
       } else {
         const inp = st.phase === 'over' ? {} : p.human ? (st.paused ? {} : humanInput(dt)) : botInput(p, dt);
-        const mul = (p === st.it ? IT_BOOST : 1) * (p.human ? 1 : p.skill.speed);
+        const mul = (isIt(p) ? IT_BOOST : 1) * (p.human ? 1 : p.skill.speed);
         P.step(p.body, inp, { colliders: st.colliders, gravity: st.gravity, speedMul: mul }, dt);
         for (const e of p.body.events) {
           if (e === 'fell') {
-            const sp = st.spawns[Math.floor(Math.random() * st.spawns.length)];
+            const sp = st.treasure && p.home ? p.home : st.spawns[Math.floor(Math.random() * st.spawns.length)];
             P.respawn(p.body, sp.x, sp.y + 0.05, sp.z, 1);
             p.rs++;
             if (p.human) { TG.Sound.play('fell'); sub('Whoops! You fell off.', 1.5); }
@@ -429,6 +529,7 @@
 
     // IT tags by touching someone (no button). The host checks bots; your computer checks you.
     st.claimT -= dt;
+    if (st.treasure) treasureChecks();
     const it = st.it;
     if (st.phase === 'play' && it && it.alive && !st.pending && it.kind !== 'remote' && it.body.frozen <= 0) {
       const q = findTag(it);
@@ -466,6 +567,11 @@
     } else st.itMark.visible = false;
 
     if (st.burning) updateFire(dt);
+    if (st.chest) { // the gem spins and bobs above the chest
+      const gem = st.chest.userData.gem;
+      gem.rotation.y += dt * 2;
+      gem.position.y = 1.4 + Math.sin(st.time * 3) * 0.12;
+    }
     updateParticles(dt);
     updateCamera(dt);
     updateHud(dt);
@@ -479,6 +585,8 @@
     if (!st) return;
     st.paused = v;
     $('pause').hidden = !v;
+    if (v) unlockMouse(); else lockMouse(); // paused: give the cursor back so you can click the buttons
+    if (v) $('hud-lock').hidden = true;
     I.clear();
   }
 
@@ -542,19 +650,133 @@
     TG.Sound.play('win');
     banner(w.human ? 'YOU WIN!' : `${w.name} WINS!`, 'win', 99);
     sub('', 0);
+    $('results').querySelector('h2').textContent = 'Final ranking';
     const rank = [w].concat(st.elim.slice().reverse());
     $('results-list').innerHTML = rank.map((p, i) =>
       `<li style="--c:${p.color}"><b>${i + 1}</b><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>(you)</em>' : ''}${i === 0 ? ' 🏆' : ''}</li>`).join('');
-    setTimeout(() => { if (st && st.phase === 'over') $('results').hidden = false; }, 2200);
+    setTimeout(() => { if (st && st.phase === 'over') { unlockMouse(); $('results').hidden = false; } }, 2200);
   }
 
   function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+  // ---------- Treasure Time ----------
+  // Each frame: did an IT touch a runner? Did a runner reach the treasure?
+  // Like tagging: the host checks the bots, and your computer checks you.
+  function treasureChecks() {
+    if (st.phase !== 'play' || st.pending) return;
+    for (const it of st.its) {
+      if (it.kind === 'remote' || it.body.frozen > 0) continue;
+      for (const q of alivePlayers()) {
+        if (isIt(q) || q.body.frozen > 0 || !inReach(it.body, q.body)) continue;
+        hostOrClaim({ t: 'home', r: st.round, by: it.key, who: q.key });
+        return;
+      }
+    }
+    const T = st.treasurePos;
+    for (const q of alivePlayers()) {
+      if (q.kind === 'remote' || isIt(q)) continue;
+      const b = q.body;
+      if (Math.hypot(b.x - T.x, b.z - T.z) <= TREASURE_R && Math.abs(b.y - T.y) <= 1.6) {
+        hostOrClaim({ t: 'tend', r: st.round, team: 'runners', who: q.key });
+        return;
+      }
+    }
+  }
+  // The host sends the event to everyone. Other computers ask the host first.
+  function hostOrClaim(ev) {
+    if (st.host) { setPending(); send(ev); }
+    else if (st.claimT <= 0) { st.claimT = 0.5; st.net.claim(Object.assign({ treasure: true }, ev)); }
+  }
+
+  // An IT touched a runner: the runner zaps back to their spawn point.
+  function sendHome(by, who) {
+    burst(who.body.x, who.body.y + 1, who.body.z, ['#ffd23f', '#ffffff', who.color], 24, 6);
+    TG.Sound.play('tag');
+    if (who.kind !== 'remote') { // the computer that moves this player puts them back home
+      const h = who.home;
+      P.respawn(who.body, h.x, h.y + 0.05, h.z, 1);
+      who.rs++;
+      who.ai = newAi(who.body);
+    }
+    if (who.human) { banner('Tagged!', 'it', 1.2); sub(`${by.name} sent you back to your spawn!`, 2); }
+    else if (by.human) sub(`You sent ${who.name} home!`, 2);
+    else sub(`${by.name} sent ${who.name} home!`, 1.6);
+  }
+
+  function finishTreasure(team, who) {
+    st.phase = 'over';
+    const winners = st.players.filter((p) => isIt(p) === (team === 'its'));
+    const losers = st.players.filter((p) => !winners.includes(p));
+    const meWon = !!st.human && winners.includes(st.human);
+    st.winner = meWon ? st.human : who || winners[0];
+    TG.Sound.play('win');
+    if (team === 'runners') {
+      const T = st.treasurePos;
+      burst(T.x, T.y + 1, T.z, ['#ffd23f', '#fff3a0', '#ffffff'], 70, 10);
+      banner(meWon ? 'YOUR TEAM WINS!' : 'THE RUNNERS WIN!', 'win', 99);
+      sub(`${who ? who.name : 'A runner'} grabbed the treasure!`, 4);
+    } else {
+      banner(meWon ? 'YOUR TEAM WINS!' : 'THE ITs WIN!', 'win', 99);
+      sub('Time ran out. The treasure is safe!', 4);
+    }
+    $('results').querySelector('h2').textContent = team === 'runners' ? '🏆 Runners win!' : '🏆 ITs win!';
+    const row = (p, won) => `<li style="--c:${p.color}"><b>${won ? '🏆' : ''}</b><span class="dot"></span>${esc(p.name)} <small>${isIt(p) ? 'IT' : 'runner'}</small>${p.human ? ' <em>(you)</em>' : ''}</li>`;
+    $('results-list').innerHTML = winners.map((p) => row(p, true)).join('') + losers.map((p) => row(p, false)).join('');
+    setTimeout(() => { if (st && st.phase === 'over') { unlockMouse(); $('results').hidden = false; } }, 2200);
+  }
+
+  // A red ring under each IT's feet.
+  const ringGeo = new THREE.TorusGeometry(0.75, 0.07, 8, 36);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
+  function makeItRing() {
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.06;
+    return ring;
+  }
+
+  // The treasure chest, with a spinning gem and a tall beam of light so you can find it.
+  function makeTreasure() {
+    const g = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: '#8b5a2b', roughness: 0.8 });
+    const gold = new THREE.MeshStandardMaterial({ color: '#ffd23f', emissive: '#7a5a00', roughness: 0.3, metalness: 0.6 });
+    const box = (w, h, d, m, x, y, z) => {
+      const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      o.position.set(x, y, z);
+      o.castShadow = true;
+      g.add(o);
+      return o;
+    };
+    box(1.1, 0.6, 0.75, wood, 0, 0.3, 0);        // the box
+    box(1.14, 0.08, 0.79, gold, 0, 0.62, 0);     // gold rim
+    box(0.08, 0.62, 0.8, gold, -0.35, 0.31, 0);  // gold bands
+    box(0.08, 0.62, 0.8, gold, 0.35, 0.31, 0);
+    box(0.16, 0.2, 0.06, gold, 0, 0.5, 0.4);     // the lock
+    const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.375, 0.375, 1.1, 16, 1, false, 0, Math.PI), wood);
+    lid.rotation.z = Math.PI / 2;                // half a cylinder on its side = a round lid
+    lid.position.y = 0.66;
+    g.add(lid);
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.22), new THREE.MeshStandardMaterial({ color: '#ffe680', emissive: '#ffb300', emissiveIntensity: 0.8 }));
+    gem.position.y = 1.4;
+    g.add(gem);
+    g.userData.gem = gem;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 40, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: '#ffd23f', transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    beam.position.y = 20;
+    g.add(beam);
+    const light = new THREE.PointLight(0xffd23f, 1.5, 9);
+    light.position.y = 1.5;
+    g.add(light);
+    return g;
+  }
+
+  // Is this player IT? (Treasure Time has a whole team of ITs.)
+  const isIt = (p) => (st.treasure ? st.its.includes(p) : p === st.it);
+
   function updateTags() {
     for (const p of st.players) {
-      const isIt = p === st.it;
-      p.tagN.visible = !isIt;
-      p.tagIt.visible = isIt;
+      p.tagN.visible = !isIt(p);
+      p.tagIt.visible = isIt(p);
     }
   }
 
@@ -601,9 +823,78 @@
     return best;
   }
 
+  // Treasure Time, IT bot: chase runners who get close, otherwise stand guard by the treasure.
+  function decideGuard(p) {
+    const b = p.body, ai = p.ai, sk = p.skill, T = st.treasurePos;
+    ai.run = true;
+    ai.alert = false;
+    let t = null, best = Infinity;
+    for (const q of alivePlayers()) {
+      if (isIt(q) || q.body.frozen > 0) continue;
+      const toTreasure = Math.hypot(q.body.x - T.x, q.body.z - T.z);
+      const toMe = Math.hypot(q.body.x - b.x, q.body.z - b.z);
+      if ((toTreasure < 12 || toMe < 5) && toMe < best) { best = toMe; t = q; }
+    }
+    // if another IT is closer to that runner, let them chase it and stay on guard (unless it's right next to us)
+    if (t && best > 6 && st.its.some((o) => o !== p && Math.hypot(t.body.x - o.body.x, t.body.z - o.body.z) < best)) t = null;
+    if (t) {
+      const tb = t.body;
+      ai.alert = true; // a runner is coming: think faster
+      if (best > 6) {
+        // not close yet: block the way by standing between the runner and the treasure
+        const rx = tb.x - T.x, rz = tb.z - T.z, rd = Math.hypot(rx, rz) || 1, k = Math.min(rd * 0.5, 4);
+        setDir(ai, T.x + (rx / rd) * k - b.x, T.z + (rz / rd) * k - b.z);
+        return;
+      }
+      const lead = sk.lead * Math.min(1, best / 8);
+      setDir(ai, tb.x + tb.vx * lead - b.x, tb.z + tb.vz * lead - b.z);
+      if (best < 5.5 && best > 2 && Math.random() < sk.dash) ai.wantDash = true;
+      if (tb.y > b.y + 0.8 && best < 7 && b.grounded) ai.wantJump = true;
+      return;
+    }
+    // each IT has its own guard spot in a circle around the treasure
+    if (!ai.guard) ai.guard = findGuardSpot(st.its.indexOf(p));
+    const g = ai.guard;
+    if (Math.hypot(g.x - b.x, g.z - b.z) > 1) setDir(ai, g.x - b.x, g.z - b.z);
+    else setDir(ai, 0, 0);
+  }
+
+  // A spot next to the treasure that's open ground (not inside a wall, not over a hole).
+  function findGuardSpot(i) {
+    const T = st.treasurePos, start = (i / Math.max(1, st.its.length)) * Math.PI * 2 + 0.6;
+    for (const r of [2.5, 1.6]) {
+      for (let k = 0; k < 12; k++) {
+        const a = start + (k * Math.PI * 2) / 12;
+        const x = T.x + Math.cos(a) * r, z = T.z + Math.sin(a) * r;
+        if (!P.anyHit(st.colliders, x, T.y + 0.05, z, P.C.radius, P.C.standH) && groundAhead(x, T.y, z)) return { x, z };
+      }
+    }
+    return { x: T.x, z: T.z };
+  }
+
+  // Treasure Time, runner bot: head for the treasure, swerving away from ITs.
+  function decideRaider(p) {
+    const b = p.body, ai = p.ai, sk = p.skill, T = st.treasurePos;
+    ai.run = true;
+    const l = Math.hypot(T.x - b.x, T.z - b.z) || 1;
+    let fx = (T.x - b.x) / l, fz = (T.z - b.z) / l;
+    const fear = sk.fear * 0.6, brave = Math.min(1, l / 6); // close to the treasure: just go for it!
+    for (const it of st.its) {
+      const dx = b.x - it.body.x, dz = b.z - it.body.z, d = Math.hypot(dx, dz);
+      if (d < fear && d > 0.01) {
+        const w = ((fear - d) / fear) * 1.8 * brave;
+        fx += (dx / d) * w; fz += (dz / d) * w;
+      }
+    }
+    setDir(ai, fx, fz);
+    if (l < 5 && l > 2 && Math.random() < sk.dash * 0.5) ai.wantDash = true;
+    if (T.y > b.y + 0.8 && l < 6 && b.grounded) ai.wantJump = true;
+  }
+
   function decide(p) {
     const b = p.body, ai = p.ai, sk = p.skill;
     ai.run = false;
+    if (st.treasure) { if (isIt(p)) decideGuard(p); else decideRaider(p); return; }
     if (p === st.it) {
       const t = nearestTarget(p);
       if (!t) { wander(p); return; }
@@ -700,7 +991,7 @@
     const inp = { mx: 0, mz: 0 };
     if (st.phase !== 'play' || b.frozen > 0) { ai.stuckT = 0; ai.sx = b.x; ai.sz = b.z; return inp; }
     ai.think -= dt;
-    if (ai.think <= 0) { ai.think = sk.react * (0.7 + Math.random() * 0.6); decide(p); }
+    if (ai.think <= 0) { ai.think = sk.react * (0.7 + Math.random() * 0.6) * (ai.alert ? 0.4 : 1); decide(p); }
     let dx = ai.dirX, dz = ai.dirZ;
     if (ai.detourT > 0) { ai.detourT -= dt; dx = ai.detX; dz = ai.detZ; }
 
@@ -976,7 +1267,7 @@
   }
   function refreshList() {
     $('hud-players').innerHTML = st.players.map((p) =>
-      `<li class="${p.alive ? '' : 'out'} ${p === st.it ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${p === st.it ? ' <b>IT</b>' : ''}</li>`).join('');
+      `<li class="${p.alive ? '' : 'out'} ${isIt(p) ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${isIt(p) ? ' <b>IT</b>' : ''}</li>`).join('');
   }
   function updateHud(dt) {
     if (bannerT > 0 && (bannerT -= dt) <= 0) $('banner').className = '';
@@ -984,17 +1275,19 @@
     const t = Math.max(0, Math.ceil(st.timeLeft));
     $('hud-time').textContent = Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
     $('hud-time').classList.toggle('low', st.phase === 'play' && t <= 5);
-    $('hud-round').textContent = `Round ${st.round}/${st.totalRounds}`;
+    $('hud-round').textContent = st.treasure ? '💰 Treasure Time' : `Round ${st.round}/${st.totalRounds}`;
     const me = st.human && st.human.alive ? st.human : null;
-    $('game-ui').classList.toggle('you-it', !!me && me === st.it);
+    $('game-ui').classList.toggle('you-it', !!me && isIt(me));
     $('hud-me').hidden = !me;
     if (me) {
       $('game-stamina').style.width = (me.body.stamina / P.C.stamina) * 100 + '%';
       $('game-stamina').classList.toggle('tired', me.body.exhausted);
-      $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'IT (wait...)' : 'You are IT! Touch someone!') : me.body.frozen > 0 && st.phase === 'play' ? 'Frozen!' : 'Runner';
+      if (st.treasure) $('hud-role').textContent = isIt(me) ? 'IT team: guard the treasure!' : me.body.frozen > 0 && st.phase === 'play' ? 'Sent home!' : 'Runner: grab the treasure!';
+      else $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'IT (wait...)' : 'You are IT! Touch someone!') : me.body.frozen > 0 && st.phase === 'play' ? 'Frozen!' : 'Runner';
     }
     $('hud-spectate').hidden = !(st.human && !st.human.alive && st.phase !== 'over');
+    $('hud-lock').hidden = isLocked() || st.paused || st.phase === 'over';
   }
 
-  TG.Game = { init, start, stop, update, render, resize, isActive: () => !!st, allMaps, debug: () => st };
+  TG.Game = { init, start, stop, update, render, resize, isActive: () => !!st, allMaps, itsFor, debug: () => st };
 })();

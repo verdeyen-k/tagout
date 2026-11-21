@@ -214,3 +214,4 @@ dialog h2 { font-family: Bungee, sans-serif; font-weight: 400; margin: 0 0 12px;
 #lb-players li.bot { opacity: 0.7; }
 #lb-players em { color: var(--muted); font-style: normal; font-size: 12px; margin-left: auto; }
 #lb-host[hidden] { display: none; }
+#hud-lock { position: fixed; top: 74px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; padding: 8px 16px; font-weight: 800; pointer-events: none; }
