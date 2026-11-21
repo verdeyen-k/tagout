@@ -62,14 +62,15 @@
     const rx = Math.cos(st.camYaw), rz = -Math.sin(st.camYaw);  // camera right
     const ix = (I.down('KeyD') ? 1 : 0) - (I.down('KeyA') ? 1 : 0);
     const iz = (I.down('KeyW') ? 1 : 0) - (I.down('KeyS') ? 1 : 0);
+    const combo = TG.Combos.read(dt);
     P.step(b, {
       mx: rx * ix + fx * iz,
       mz: rz * ix + fz * iz,
       run: I.down('ShiftLeft'),
-      crawl: I.down('KeyC'),
+      crawl: I.down('KeyC') || combo.crawl,
       jump: I.pressed('Space'),
-      dash: I.pressed('KeyF'),
-      back: I.pressed('KeyQ'),
+      dash: I.pressed('KeyF') || combo.dash,
+      back: I.pressed('KeyQ') || combo.back,
     }, { colliders: st.colliders, gravity: st.gravity }, dt);
 
     for (const e of b.events) {

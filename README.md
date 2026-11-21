@@ -7,7 +7,7 @@ A 3D tag game for 2–8 players. Whoever is IT when the timer runs out is OUT. T
 ## How to play
 
 - Press **▶ Play** to pick players, usernames, hats and bots (easy, normal or hard), the round length, and the map.
-- **WASD** to move · **Shift** to run · **Space** to jump (press again for a double jump) · **F** to dash · **Q** to back dash · **C** to crawl · **Z/X** or drag the mouse to turn the camera · **Esc** to pause.
+- **WASD** to move · **Shift** to run · **Space** to jump (press again for a double jump) · **W+S** (or **F**) to dash · **A+D** (or **Q**) to back dash · hold **A+W+D** (or **C**) to crawl · **Z/X** or drag the mouse to turn the camera · **Esc** to pause.
 - When you're IT, just touch someone to tag them!
 - **🔥 Burning Battle** (pick it under **Mode**): IT is on fire and leaves a trail of fire behind them. Touch the fire and you're IT! When someone new is IT, the old fire goes out.
 - **🌐 Play online**: one person presses **Make a room** and tells their friends the 4-letter code. Friends press **Join a room** on their own computers. The person who made the room picks the bots, round length and map, then presses **GO!** Online, everyone is called by their color. If a friend leaves partway through, a bot takes over for them.
@@ -22,3 +22,5 @@ Six maps: **the caves**, **space stares**, **the city**, **the feilds**, **the l
 Plain HTML and JavaScript using three.js r128 from cdnjs, with no build step.
 
 Online rooms use the family Firebase Realtime Database (`kvgames`), under `tagout/rooms/<CODE>`. Only game data goes through it: color slots, hats from the fixed list, positions and tag events. No names or text. The host's computer runs the rules and the bots, and each computer moves its own player (`js/net.js`, plus the event code in `js/game.js`). The database rules have to allow the `tagout` key. The official maps live in `maps/`. After changing them, run `node tools/build-maps.js` to update `js/maps-official.js`.
+
+After changing any file in `js/` or `css/`, bump the `?v=` number on its tag in `index.html` (for example `?v=2` to `?v=3`). That makes browsers load the new code instead of an old copy they saved.

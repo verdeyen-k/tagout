@@ -561,6 +561,7 @@
   // ---------- your controls ----------
   function humanInput(dt) {
     const pad = TG.Pad.get(0);
+    const combo = TG.Combos.read(dt);
     if (I.down('KeyZ')) view.yaw += 2.6 * dt;
     if (I.down('KeyX')) view.yaw -= 2.6 * dt;
     if (pad) {
@@ -576,10 +577,10 @@
     return {
       mx: rx * ix + fx * iz, mz: rz * ix + fz * iz,
       run: I.down('ShiftLeft') || TG.Pad.down(0, 7),
-      crawl: I.down('KeyC') || TG.Pad.down(0, 6),
+      crawl: I.down('KeyC') || combo.crawl || TG.Pad.down(0, 6),
       jump: I.pressed('Space') || TG.Pad.pressed(0, 0),
-      dash: I.pressed('KeyF') || TG.Pad.pressed(0, 1),
-      back: I.pressed('KeyQ') || TG.Pad.pressed(0, 3),
+      dash: I.pressed('KeyF') || combo.dash || TG.Pad.pressed(0, 1),
+      back: I.pressed('KeyQ') || combo.back || TG.Pad.pressed(0, 3),
     };
   }
 

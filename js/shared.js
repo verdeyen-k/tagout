@@ -30,6 +30,28 @@
     clear() { down.clear(); pressed.clear(); },
   };
 
+  // ---------- key combos ----------
+  // W+S = dash, A+D = back dash, hold A+W+D = crawl.
+  // Call read(dt) once per frame for the player using the keyboard.
+  let wasWS = false, wasAD = false, backWait = -1;
+  TG.Combos = {
+    read(dt) {
+      const w = down.has('KeyW'), s = down.has('KeyS'), a = down.has('KeyA'), d = down.has('KeyD');
+      const ws = w && s, ad = a && d;
+      const out = {
+        dash: ws && !wasWS,   // only on the moment you press them together, not while holding
+        back: false,
+        crawl: ad && w,
+      };
+      // A+D is also part of A+W+D (crawl), so wait a tiny moment to see if W is coming before back dashing.
+      if (ad && !wasAD) backWait = 0.08;
+      if (!ad || w) backWait = -1;
+      else if (backWait >= 0 && (backWait -= dt) < 0) out.back = true;
+      wasWS = ws; wasAD = ad;
+      return out;
+    },
+  };
+
   // ---------- sounds (little WebAudio beeps) ----------
   let ac = null;
   function ctx() {
