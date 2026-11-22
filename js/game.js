@@ -22,6 +22,8 @@
   const TREASURE_R = 1.3;
   const itsFor = (n) => Math.max(1, Math.floor(n / 2)); // half are ITs: 2-3 players: 1 IT, 4-5: 2, 6-7: 3, 8: 4
   const treasureRounds = (n) => Math.max(2, n - 1);     // how many rounds a Treasure Time match has
+  // Parasite: maps the parasite can't pick, and how long a friend online gets to pick before it's random
+  const PARASITE_SKIP = ['official-space-stares'], PICK_TIME = 20;
 
   let renderer, canvas, camera;
   let st = null;
@@ -53,7 +55,7 @@
     });
     // Esc gives the mouse back (the browser does that). When that happens mid-game, pause.
     document.addEventListener('pointerlockchange', () => {
-      if (!isLocked() && st && !st.paused && st.phase !== 'over') setPaused(true);
+      if (!isLocked() && st && !st.paused && st.phase !== 'over' && st.phase !== 'picking') setPaused(true);
     });
     $('btn-resume').addEventListener('click', () => setPaused(false));
     $('btn-quit').addEventListener('click', () => { stop(); TG.Main.showMenu(); });
@@ -63,6 +65,10 @@
       if (online) TG.Main.showLobby(); else start(s);
     });
     $('btn-results-menu').addEventListener('click', () => { stop(); TG.Main.showMenu(); });
+    $('picker-maps').addEventListener('click', (e) => {
+      const id = e.target.closest('button') && e.target.closest('button').dataset.map;
+      if (id) pickedMap(id);
+    });
   }
   function resize(a) { camera.aspect = a; camera.updateProjectionMatrix(); }
 
@@ -113,7 +119,7 @@
       ch.hatAnchor.add(hat.group);
       const tagY = 1.95 + hat.height;
       const tagN = TG.makeNameTag(s.name, s.color, false);
-      const tagIt = TG.makeNameTag((setup.gameMode === 'werewolf' ? 'WEREWOLF · ' : 'IT · ') + s.name, s.color, true);
+      const tagIt = TG.makeNameTag((setup.gameMode === 'werewolf' ? 'WEREWOLF · ' : setup.gameMode === 'parasite' ? 'PARASITE · ' : 'IT · ') + s.name, s.color, true);
       tagN.position.y = tagIt.position.y = tagY;
       tagIt.visible = false;
       ch.root.add(tagN, tagIt);
@@ -135,9 +141,14 @@
       burning: setup.gameMode === 'burning', trail: [], lastDrop: null, emberT: 0,
       treasure: setup.gameMode === 'treasure', its: [], treasurePos: null, chest: null,
       werewolf: setup.gameMode === 'werewolf', wolfKey: null,
+      parasite: setup.gameMode === 'parasite', picking: null,
     };
     if (st.treasure) st.totalRounds = treasureRounds(players.length);
-    for (const p of players) p.score = 0; // Treasure Time points
+    if (st.parasite) { // everyone starts with the parasite once, in a random order
+      st.totalRounds = players.length;
+      st.order = shuffle(players.map((p) => p.key));
+    }
+    for (const p of players) p.score = 0; // Treasure Time points, Parasite tags
     if (net) {
       net.openGame({
         event: (ev) => { if (st) st.inbox.push(ev); },
@@ -149,6 +160,7 @@
     $('game-ui').hidden = false;
     $('results').hidden = true;
     $('pause').hidden = true;
+    $('picker').hidden = true;
     $('btn-again').textContent = net ? 'Back to the room' : 'Play again';
     $('btn-quit').textContent = net ? 'Leave the room' : 'Quit to menu';
     I.clear();
@@ -166,6 +178,7 @@
     $('game-ui').hidden = true;
     $('results').hidden = true;
     $('pause').hidden = true;
+    $('picker').hidden = true;
   }
 
   function clearScene() {
@@ -194,6 +207,7 @@
     const r = st.round + 1;
     const map = pickMap(r);
     if (st.treasure) { hostStartTreasure(r, map); return; }
+    if (st.parasite) { hostParasitePick(r); return; }
     const n = spawnsFor(map).length;
     const alive = alivePlayers();
     const order = shuffle([...Array(n).keys()]);
@@ -233,6 +247,62 @@
     send({ t: 'round', r, map: map.id, it: its[0].key, its: its.map((p) => p.key), treasure: ti, spots });
   }
 
+  // ---------- Parasite: whoever starts with the parasite picks the level ----------
+  function parasiteMaps() {
+    const { official, custom } = allMaps();
+    const list = official.filter((m) => !PARASITE_SKIP.includes(m.id)).concat(st.online ? [] : custom);
+    return list.length ? list : [MF.newMap('day')];
+  }
+  function hostParasitePick(r) {
+    const who = st.byKey.get(st.order[(r - 1) % st.order.length]) || alivePlayers()[0];
+    if (who.kind === 'bot') { // bots just pick a random level
+      const maps = parasiteMaps();
+      hostParasiteRound(r, who, maps[Math.floor(Math.random() * maps.length)]);
+      return;
+    }
+    st.picking = { r, who: who.key, until: who.kind === 'remote' ? st.time + PICK_TIME : Infinity };
+    send({ t: 'pick', r, who: who.key });
+  }
+  function hostParasiteRound(r, who, map) {
+    st.picking = null;
+    const n = spawnsFor(map).length;
+    const order = shuffle([...Array(n).keys()]);
+    const spots = {};
+    alivePlayers().forEach((p, i) => { spots[p.key] = [order[i % n], i >= n ? 1 : 0]; });
+    setPending();
+    send({ t: 'round', r, map: map.id, it: who.key, spots });
+  }
+  // Everyone: someone is picking the level. If it's you, show the buttons.
+  function showPick(ev) {
+    const who = st.byKey.get(ev.who);
+    if (!who) return;
+    st.phase = 'picking';
+    st.pickR = ev.r;
+    st.timeLeft = st.setup.roundLen;
+    if (who.kind === 'me') {
+      $('picker-maps').innerHTML = parasiteMaps().map((m) => `<button class="big" data-map="${esc(m.id)}">${esc(m.name)}</button>`).join('');
+      $('picker').hidden = false;
+      unlockMouse();
+      banner('🦠 You have the parasite!', '', 2.5);
+      sub('Pick the level!', 99);
+    } else {
+      banner(`🦠 Round ${ev.r} of ${st.totalRounds}`, '', 2.5);
+      sub(`${who.name} has the parasite and is picking the level...`, 99);
+    }
+  }
+  // You clicked a level
+  function pickedMap(id) {
+    if (!st || st.phase !== 'picking' || !st.human) return;
+    $('picker').hidden = true;
+    sub('', 0);
+    lockMouse();
+    TG.Sound.play('click');
+    if (st.host) {
+      const m = parasiteMaps().find((x) => x.id === id);
+      if (st.picking && m) hostParasiteRound(st.picking.r, st.human, m);
+    } else st.net.claim({ pick: true, r: st.pickR, who: st.human.key, map: id });
+  }
+
   function hostTag(by, who, fire) {
     setPending();
     send({ t: 'tag', r: st.round, by: by.key, who: who.key, fire: !!fire });
@@ -243,6 +313,12 @@
     switch (ev.t) {
       case '_claim': {
         const c = ev.c || {};
+        if (c.pick) { // Parasite: a friend picked the level
+          if (!st.host || !st.picking || c.r !== st.picking.r || c.who !== st.picking.who) return;
+          const m = parasiteMaps().find((x) => x.id === c.map);
+          if (m) hostParasiteRound(st.picking.r, st.byKey.get(c.who), m);
+          return;
+        }
         if (c.treasure) { // Treasure Time: another computer says "I sent a runner home" or "I grabbed the treasure"
           if (!st.host || !st.treasure || st.pending || st.phase !== 'play' || c.r !== st.round) return;
           const by = st.byKey.get(c.by), who = st.byKey.get(c.who);
@@ -267,7 +343,8 @@
         if (st.phase === 'countdown') { st.phase = 'play'; st.t = 0; }
         if (st.phase !== 'play') return;
         st.pending = false;
-        if (st.werewolf) wolfTag(by, who); else applyTag(by, who, !!ev.fire);
+        if (st.werewolf) wolfTag(by, who);
+        else { if (st.parasite) by.score++; applyTag(by, who, !!ev.fire); }
         return;
       }
       case 'out': {
@@ -297,6 +374,27 @@
         endTreasureRound(ev.team === 'runners' ? 'runners' : 'its', st.byKey.get(ev.who) || null);
         return;
       }
+      case 'pick': { // Parasite: someone is picking the level
+        if (!st.parasite || ev.r !== st.round + 1 || st.phase === 'over') return;
+        showPick(ev);
+        return;
+      }
+      case 'pend': { // Parasite: time ran out
+        if (!st.parasite || ev.r !== st.round || st.phase !== 'play') return;
+        st.pending = false;
+        st.phase = 'roundEnd';
+        st.t = 3.2;
+        TG.Sound.play('go');
+        banner("Time's up!", '', 2.6);
+        sub(st.round < st.totalRounds ? 'Next round, someone new gets the parasite!' : 'That was the last round!', 3);
+        return;
+      }
+      case 'pover': { // Parasite: all the rounds are done
+        if (!st.parasite || st.phase === 'over') return;
+        st.pending = false;
+        finishScoreGame('🦠 Most tags', 'tag');
+        return;
+      }
       case 'wend': { // Werewolf: time ran out
         if (!st.werewolf || ev.r !== st.round || st.phase !== 'play') return;
         st.pending = false;
@@ -306,7 +404,7 @@
       case 'tover': { // Treasure Time: all the rounds are done
         if (!st.treasure || st.phase === 'over') return;
         st.pending = false;
-        finishTreasureGame();
+        finishScoreGame('💰 Final points', 'point');
         return;
       }
       case 'bot': {
@@ -386,6 +484,9 @@
     });
     const it = st.byKey.get(ev.it);
     st.it = it && it.alive ? it : alive[0];
+    st.picking = null;
+    $('picker').hidden = true;
+    if (st.parasite) { st.itRing.material.color.set(0x4fd16a); glow.color.set(0x4fd16a); }
     if (st.werewolf) {
       st.wolfKey = st.it.key;
       if (!st.it.wolfLook) { st.it.wolfLook = true; addWolfLook(st.it.ch); }
@@ -417,15 +518,17 @@
     view.yaw = (me || st.it || st.its[0]).body.yaw + Math.PI;
     view.pitch = 0.35;
     updateTags();
-    $('hud-map').textContent = (st.burning ? '🔥 ' : st.werewolf ? '🐺 ' : '') + map.name;
+    $('hud-map').textContent = (st.burning ? '🔥 ' : st.werewolf ? '🐺 ' : st.parasite ? '🦠 ' : '') + map.name;
     if (st.treasure) {
       banner(`💰 Round ${st.round} of ${st.totalRounds}`, '', 1.8);
       if (!st.human) sub('Runners: grab the treasure! ITs: guard it!', 4);
       else if (isIt(st.human)) sub("You're on the IT team. Guard the treasure! Touch runners to send them home.", 4);
       else sub("You're a runner. Follow the light and grab the treasure before time runs out!", 4);
     } else if (st.werewolf) banner(`🐺 Round ${st.round}`, '', 1.6);
+    else if (st.parasite) banner(`🦠 Round ${st.round} of ${st.totalRounds}`, '', 1.6);
     else banner(`Round ${st.round} of ${st.totalRounds}`, '', 1.6);
-    if (st.treasure) { /* messages above */ } else if (st.werewolf) sub(st.it === st.human ? "You're the WEREWOLF! Tag everyone to win!" : `${st.it.name} is the WEREWOLF! Don't get tagged or you're out!`, 3.5); else if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
+    if (st.treasure) { /* messages above */ } else if (st.parasite) sub(st.it === st.human ? 'You have the PARASITE! Touch someone to pass it on. Every tag = 1 point!' : `${st.it.name} has the parasite. Don't let them touch you!`, 3.5);
+    else if (st.werewolf) sub(st.it === st.human ? "You're the WEREWOLF! Tag everyone to win!" : `${st.it.name} is the WEREWOLF! Don't get tagged or you're out!`, 3.5); else if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
     else sub(st.it === st.human ? "You're IT first! Touch someone to tag them!" : `${st.it.name} is IT. Run!`, 3);
     refreshList();
   }
@@ -495,6 +598,14 @@
     if (st.paused && !st.online) return; // online, the game keeps going while your menu is open
     st.time += dt;
     while (st.inbox.length) applyEvent(st.inbox.shift());
+    // Parasite: a friend took too long to pick the level (or left), so pick a random one
+    if (st.host && st.picking) {
+      const w = st.byKey.get(st.picking.who);
+      if (!w || w.kind === 'bot' || st.time > st.picking.until) {
+        const maps = parasiteMaps();
+        hostParasiteRound(st.picking.r, w || alivePlayers()[0], maps[Math.floor(Math.random() * maps.length)]);
+      }
+    }
     if (!st.scene) return;
     if (st.pending && (st.pendingT -= dt) <= 0) st.pending = false; // a lost message: try again
 
@@ -517,7 +628,7 @@
         if (st.host && !st.pending) {
           setPending();
           // Treasure Time: time ran out, so the ITs kept the treasure safe
-          send(st.treasure ? { t: 'tend', r: st.round, team: 'its' } : st.werewolf ? { t: 'wend', r: st.round } : { t: 'out', r: st.round, who: st.it.key });
+          send(st.treasure ? { t: 'tend', r: st.round, team: 'its' } : st.werewolf ? { t: 'wend', r: st.round } : st.parasite ? { t: 'pend', r: st.round } : { t: 'out', r: st.round, who: st.it.key });
         }
       }
     } else if (st.phase === 'roundEnd') {
@@ -527,6 +638,9 @@
         if (st.treasure) {
           if (st.round >= st.totalRounds) { setPending(); send({ t: 'tover' }); }
           else hostStartRound();
+        } else if (st.parasite) {
+          if (st.round >= st.totalRounds) { setPending(); send({ t: 'pover' }); }
+          else if (!st.picking) hostStartRound();
         } else if (st.werewolf) {
           // 2 or more runners left: another round. 1 left: they win. None left: the werewolf wins.
           const runners = alive.filter((p) => p.key !== st.wolfKey);
@@ -657,9 +771,13 @@
     st.it = best;
     best.body.frozen = TAG_FREEZE;
     st.noBack = { it: best, cannot: p, until: st.time + NO_TAG_BACK };
-    burst(best.body.x, best.body.y + 1, best.body.z, fire ? FIRE_COLORS : ['#ff2a2a', '#ffd23f', '#ffffff'], 26, 6);
+    burst(best.body.x, best.body.y + 1, best.body.z, fire ? FIRE_COLORS : st.parasite ? ['#4fd16a', '#a6ff4d', '#1f7a35'] : ['#ff2a2a', '#ffd23f', '#ffffff'], 26, 6);
     TG.Sound.play(fire ? 'burn' : 'tag');
-    if (fire) {
+    if (st.parasite) {
+      if (best.human) { banner('🦠 You got the parasite!', 'it', 1.4); sub(`${p.name} got a point. Go touch someone!`, 2.5); }
+      else if (p.human) sub(`You passed the parasite to ${best.name}! +1 point`, 2.5);
+      else sub(`${p.name} passed the parasite to ${best.name}!`, 2);
+    } else if (fire) {
       if (best.human) { banner("🔥 You're IT!", 'it', 1.4); sub(`You stepped in ${p.name}'s fire. Now YOU'RE on fire!`, 2.5); }
       else if (p.human) sub(`${best.name} stepped in your fire! Run!`, 2.5);
       else sub(`${best.name} stepped in ${p.name}'s fire!`, 2);
@@ -834,23 +952,24 @@
     refreshList();
   }
 
-  // All the rounds are done: most points wins.
-  function finishTreasureGame() {
+  // All the rounds are done: most points wins. (Treasure Time and Parasite)
+  function finishScoreGame(title, unit) {
     st.phase = 'over';
     const rank = st.players.slice().sort((a, b) => b.score - a.score);
     const top = rank[0].score;
     const champs = rank.filter((p) => p.score === top);
     st.winner = st.human && champs.includes(st.human) ? st.human : champs[0];
     st.its = []; // nobody is IT any more
+    st.it = null;
     for (const p of st.players) if (p.ring) { p.ch.root.remove(p.ring); p.ring = null; }
     updateTags();
     TG.Sound.play('win');
     if (champs.length > 1) banner(champs.includes(st.human) ? 'YOU TIED!' : "IT'S A TIE!", 'win', 99);
     else banner(champs[0].human ? 'YOU WIN!' : `${champs[0].name} WINS!`, 'win', 99);
-    sub(`${champs.map((p) => p.name).join(' and ')} got the most points: ${top}`, 4);
-    $('results').querySelector('h2').textContent = '💰 Final points';
+    sub(`${champs.map((p) => p.name).join(' and ')} got the most ${unit}s: ${top}`, 4);
+    $('results').querySelector('h2').textContent = title;
     $('results-list').innerHTML = rank.map((p, i) =>
-      `<li style="--c:${p.color}"><b>${p.score === top ? '🏆' : i + 1}</b><span class="dot"></span>${esc(p.name)} <small>${p.score} point${p.score === 1 ? '' : 's'}</small>${p.human ? ' <em>(you)</em>' : ''}</li>`).join('');
+      `<li style="--c:${p.color}"><b>${p.score === top ? '🏆' : i + 1}</b><span class="dot"></span>${esc(p.name)} <small>${p.score} ${unit}${p.score === 1 ? '' : 's'}</small>${p.human ? ' <em>(you)</em>' : ''}</li>`).join('');
     refreshList();
     setTimeout(() => { if (st && st.phase === 'over') { unlockMouse(); $('results').hidden = false; } }, 2200);
   }
@@ -920,7 +1039,7 @@
       view.yaw -= pad.rx * 3 * dt;
       view.pitch = Math.max(-0.2, Math.min(1.2, view.pitch + pad.ry * 2 * dt));
     }
-    if (st.phase === 'roundEnd') return {};
+    if (st.phase === 'roundEnd' || st.phase === 'picking') return {};
     const fx = -Math.sin(view.yaw), fz = -Math.cos(view.yaw);
     const rx = Math.cos(view.yaw), rz = -Math.sin(view.yaw);
     let ix = (I.down('KeyD') ? 1 : 0) - (I.down('KeyA') ? 1 : 0);
@@ -1397,7 +1516,7 @@
   }
   function refreshList() {
     $('hud-players').innerHTML = st.players.map((p) =>
-      `<li class="${p.alive ? '' : 'out'} ${isIt(p) ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${isIt(p) ? (st.werewolf ? ' <b>🐺</b>' : ' <b>IT</b>') : ''}${st.treasure ? ` <small>${p.score} pt${p.score === 1 ? '' : 's'}</small>` : ''}</li>`).join('');
+      `<li class="${p.alive ? '' : 'out'} ${isIt(p) ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${isIt(p) ? (st.werewolf ? ' <b>🐺</b>' : st.parasite ? ' <b>🦠</b>' : ' <b>IT</b>') : ''}${st.treasure ? ` <small>${p.score} pt${p.score === 1 ? '' : 's'}</small>` : st.parasite ? ` <small>${p.score} tag${p.score === 1 ? '' : 's'}</small>` : ''}</li>`).join('');
   }
   function updateHud(dt) {
     if (bannerT > 0 && (bannerT -= dt) <= 0) $('banner').className = '';
@@ -1405,19 +1524,20 @@
     const t = Math.max(0, Math.ceil(st.timeLeft));
     $('hud-time').textContent = Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
     $('hud-time').classList.toggle('low', st.phase === 'play' && t <= 5);
-    $('hud-round').textContent = st.werewolf ? `🐺 Round ${st.round}` : `${st.treasure ? '💰 ' : ''}Round ${st.round}/${st.totalRounds}`;
+    $('hud-round').textContent = st.werewolf ? `🐺 Round ${st.round}` : st.parasite ? `🦠 Round ${st.phase === 'picking' ? st.pickR : st.round}/${st.totalRounds}` : `${st.treasure ? '💰 ' : ''}Round ${st.round}/${st.totalRounds}`;
     const me = st.human && st.human.alive ? st.human : null;
     $('game-ui').classList.toggle('you-it', !!me && isIt(me));
     $('hud-me').hidden = !me;
     if (me) {
       $('game-stamina').style.width = (me.body.stamina / P.C.stamina) * 100 + '%';
       $('game-stamina').classList.toggle('tired', me.body.exhausted);
-      if (st.werewolf) $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'Werewolf (wait...)' : 'WEREWOLF! Tag everyone!') : 'Run from the werewolf!';
+      if (st.parasite) $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'Parasite (wait...)' : 'You have the PARASITE! Touch someone!') : me.body.frozen > 0 && st.phase === 'play' ? 'Frozen!' : 'Run from the parasite!';
+      else if (st.werewolf) $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'Werewolf (wait...)' : 'WEREWOLF! Tag everyone!') : 'Run from the werewolf!';
       else if (st.treasure) $('hud-role').textContent = isIt(me) ? 'IT team: guard the treasure!' : me.body.frozen > 0 && st.phase === 'play' ? 'Sent home!' : 'Runner: grab the treasure!';
       else $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'IT (wait...)' : 'You are IT! Touch someone!') : me.body.frozen > 0 && st.phase === 'play' ? 'Frozen!' : 'Runner';
     }
     $('hud-spectate').hidden = !(st.human && !st.human.alive && st.phase !== 'over');
-    $('hud-lock').hidden = isLocked() || st.paused || st.phase === 'over';
+    $('hud-lock').hidden = isLocked() || st.paused || st.phase === 'over' || st.phase === 'picking';
   }
 
   TG.Game = { init, start, stop, update, render, resize, isActive: () => !!st, allMaps, itsFor, treasureRounds, debug: () => st };

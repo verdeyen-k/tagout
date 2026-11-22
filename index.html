@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Nunito:wght@400;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=7">
+<link rel="stylesheet" href="css/style.css?v=8">
 </head>
 <body>
 <canvas id="view"></canvas>
@@ -45,7 +45,7 @@
         <small id="lb-rounds"></small>
       </div>
       <div class="su-row">
-        <label class="grow">Mode <select id="lb-mode"><option value="classic">Classic tag</option><option value="burning">🔥 Burning Battle</option><option value="treasure">💰 Treasure Time</option><option value="werewolf">🐺 Werewolf</option></select></label>
+        <label class="grow">Mode <select id="lb-mode"><option value="classic">Classic tag</option><option value="burning">🔥 Burning Battle</option><option value="treasure">💰 Treasure Time</option><option value="werewolf">🐺 Werewolf</option><option value="parasite">🦠 Parasite</option></select></label>
       </div>
       <div class="su-row">
         <label>Round <select id="lb-len"><option value="30">30 s</option><option value="45">45 s</option><option value="60">60 s</option><option value="90">90 s</option></select></label>
@@ -68,7 +68,7 @@
     </div>
     <div id="su-slots"></div>
     <div class="su-row">
-      <label class="grow">Mode <select id="su-mode"><option value="classic">Classic tag</option><option value="burning">🔥 Burning Battle</option><option value="treasure">💰 Treasure Time</option><option value="werewolf">🐺 Werewolf</option></select></label>
+      <label class="grow">Mode <select id="su-mode"><option value="classic">Classic tag</option><option value="burning">🔥 Burning Battle</option><option value="treasure">💰 Treasure Time</option><option value="werewolf">🐺 Werewolf</option><option value="parasite">🦠 Parasite</option></select></label>
       <label class="grow" id="su-wolf-box" hidden>Werewolf <select id="su-wolf"></select></label>
     </div>
     <div class="su-row">
@@ -149,6 +149,12 @@
       <button id="btn-quit" class="big">Quit to menu</button>
     </div>
   </div>
+  <div id="picker" class="overlay" hidden>
+    <div class="menu-card">
+      <h2 class="title small">🦠 Pick the level</h2>
+      <div id="picker-maps"></div>
+    </div>
+  </div>
   <div id="results" class="overlay" hidden>
     <div class="menu-card">
       <h2 class="title small">Final ranking</h2>
@@ -179,10 +185,10 @@
 <script src="js/shared.js?v=6"></script>
 <script src="js/hats.js?v=6"></script>
 <script src="js/maps-official.js?v=6"></script>
-<script src="js/net.js?v=7"></script>
+<script src="js/net.js?v=8"></script>
 <script src="js/testplay.js?v=6"></script>
 <script src="js/editor.js?v=6"></script>
-<script src="js/game.js?v=8"></script>
-<script src="js/main.js?v=8"></script>
+<script src="js/game.js?v=9"></script>
+<script src="js/main.js?v=9"></script>
 </body>
 </html>
