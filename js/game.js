@@ -113,7 +113,7 @@
       ch.hatAnchor.add(hat.group);
       const tagY = 1.95 + hat.height;
       const tagN = TG.makeNameTag(s.name, s.color, false);
-      const tagIt = TG.makeNameTag('IT · ' + s.name, s.color, true);
+      const tagIt = TG.makeNameTag((setup.gameMode === 'werewolf' ? 'WEREWOLF · ' : 'IT · ') + s.name, s.color, true);
       tagN.position.y = tagIt.position.y = tagY;
       tagIt.visible = false;
       ch.root.add(tagN, tagIt);
@@ -134,6 +134,7 @@
       scene: null, mapGroup: null,
       burning: setup.gameMode === 'burning', trail: [], lastDrop: null, emberT: 0,
       treasure: setup.gameMode === 'treasure', its: [], treasurePos: null, chest: null,
+      werewolf: setup.gameMode === 'werewolf', wolfKey: null,
     };
     if (st.treasure) st.totalRounds = treasureRounds(players.length);
     for (const p of players) p.score = 0; // Treasure Time points
@@ -198,8 +199,13 @@
     const order = shuffle([...Array(n).keys()]);
     const spots = {};
     alive.forEach((p, i) => { spots[p.key] = [order[i % n], i >= n ? 1 : 0]; });
+    let it = alive[Math.floor(Math.random() * alive.length)];
+    if (st.werewolf) { // Werewolf: the same werewolf for the whole game
+      const w = st.byKey.get(st.wolfKey);
+      if (w && w.alive) it = w;
+    }
     setPending();
-    send({ t: 'round', r, map: map.id, it: alive[Math.floor(Math.random() * alive.length)].key, spots });
+    send({ t: 'round', r, map: map.id, it: it.key, spots });
   }
   // fire = true when they got tagged by stepping in the fire trail
   // Treasure Time: pick the teams, where the treasure goes, and where everyone starts.
@@ -261,7 +267,7 @@
         if (st.phase === 'countdown') { st.phase = 'play'; st.t = 0; }
         if (st.phase !== 'play') return;
         st.pending = false;
-        applyTag(by, who, !!ev.fire);
+        if (st.werewolf) wolfTag(by, who); else applyTag(by, who, !!ev.fire);
         return;
       }
       case 'out': {
@@ -289,6 +295,12 @@
         if (!st.treasure || ev.r !== st.round || st.phase !== 'play') return;
         st.pending = false;
         endTreasureRound(ev.team === 'runners' ? 'runners' : 'its', st.byKey.get(ev.who) || null);
+        return;
+      }
+      case 'wend': { // Werewolf: time ran out
+        if (!st.werewolf || ev.r !== st.round || st.phase !== 'play') return;
+        st.pending = false;
+        endWolfRound();
         return;
       }
       case 'tover': { // Treasure Time: all the rounds are done
@@ -374,6 +386,13 @@
     });
     const it = st.byKey.get(ev.it);
     st.it = it && it.alive ? it : alive[0];
+    if (st.werewolf) {
+      st.wolfKey = st.it.key;
+      if (!st.it.wolfLook) { st.it.wolfLook = true; addWolfLook(st.it.ch); }
+      st.itRing.material.color.set(0x9b5cff);
+      glow.color.set(0x9b5cff);
+      makeNight(scene);
+    }
     st.its = [];
     st.chest = null;
     if (st.treasure) {
@@ -398,14 +417,15 @@
     view.yaw = (me || st.it || st.its[0]).body.yaw + Math.PI;
     view.pitch = 0.35;
     updateTags();
-    $('hud-map').textContent = (st.burning ? '🔥 ' : '') + map.name;
+    $('hud-map').textContent = (st.burning ? '🔥 ' : st.werewolf ? '🐺 ' : '') + map.name;
     if (st.treasure) {
       banner(`💰 Round ${st.round} of ${st.totalRounds}`, '', 1.8);
       if (!st.human) sub('Runners: grab the treasure! ITs: guard it!', 4);
       else if (isIt(st.human)) sub("You're on the IT team. Guard the treasure! Touch runners to send them home.", 4);
       else sub("You're a runner. Follow the light and grab the treasure before time runs out!", 4);
-    } else banner(`Round ${st.round} of ${st.totalRounds}`, '', 1.6);
-    if (st.treasure) { /* messages above */ } else if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
+    } else if (st.werewolf) banner(`🐺 Round ${st.round}`, '', 1.6);
+    else banner(`Round ${st.round} of ${st.totalRounds}`, '', 1.6);
+    if (st.treasure) { /* messages above */ } else if (st.werewolf) sub(st.it === st.human ? "You're the WEREWOLF! Tag everyone to win!" : `${st.it.name} is the WEREWOLF! Don't get tagged or you're out!`, 3.5); else if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
     else sub(st.it === st.human ? "You're IT first! Touch someone to tag them!" : `${st.it.name} is IT. Run!`, 3);
     refreshList();
   }
@@ -497,7 +517,7 @@
         if (st.host && !st.pending) {
           setPending();
           // Treasure Time: time ran out, so the ITs kept the treasure safe
-          send(st.treasure ? { t: 'tend', r: st.round, team: 'its' } : { t: 'out', r: st.round, who: st.it.key });
+          send(st.treasure ? { t: 'tend', r: st.round, team: 'its' } : st.werewolf ? { t: 'wend', r: st.round } : { t: 'out', r: st.round, who: st.it.key });
         }
       }
     } else if (st.phase === 'roundEnd') {
@@ -507,6 +527,11 @@
         if (st.treasure) {
           if (st.round >= st.totalRounds) { setPending(); send({ t: 'tover' }); }
           else hostStartRound();
+        } else if (st.werewolf) {
+          // 2 or more runners left: another round. 1 left: they win. None left: the werewolf wins.
+          const runners = alive.filter((p) => p.key !== st.wolfKey);
+          if (runners.length >= 2) hostStartRound();
+          else { setPending(); send({ t: 'win', who: (runners[0] || st.byKey.get(st.wolfKey) || alive[0]).key }); }
         } else if (alive.length <= 1) { setPending(); send({ t: 'win', who: alive[0].key }); }
         else hostStartRound();
       }
@@ -538,6 +563,12 @@
       }
       p.ch.update(p.body, dt);
       p.hat.update(dt);
+    }
+
+    // Werewolf: everyone got tagged, so the werewolf wins
+    if (st.werewolf && st.host && st.phase === 'play' && !st.pending && st.it && alivePlayers().length === 1) {
+      setPending();
+      send({ t: 'win', who: st.it.key });
     }
 
     // IT tags by touching someone (no button). The host checks bots; your computer checks you.
@@ -665,9 +696,76 @@
     sub('', 0);
     $('results').querySelector('h2').textContent = 'Final ranking';
     const rank = [w].concat(st.elim.slice().reverse());
+    for (const p of st.players) if (!rank.includes(p)) rank.push(p); // Werewolf: a werewolf who lost goes last
     $('results-list').innerHTML = rank.map((p, i) =>
       `<li style="--c:${p.color}"><b>${i + 1}</b><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>(you)</em>' : ''}${i === 0 ? ' 🏆' : ''}</li>`).join('');
     setTimeout(() => { if (st && st.phase === 'over') { unlockMouse(); $('results').hidden = false; } }, 2200);
+  }
+
+  // ---------- Werewolf ----------
+  // The werewolf touched someone: they're OUT right away.
+  function wolfTag(wolf, who) {
+    who.alive = false;
+    st.elim.push(who);
+    st.scene.remove(who.ch.root);
+    burst(who.body.x, who.body.y + 0.9, who.body.z, [who.color, '#9b5cff', '#ffffff'], 50, 8);
+    TG.Sound.play('elim');
+    const left = alivePlayers().length - 1;
+    if (who.human) { banner('The werewolf got you!', 'out', 2.4); sub("You're OUT. Watch the rest!", 3); }
+    else if (wolf.human) sub(`You got ${who.name}! ${left} left.`, 2.2);
+    else sub(`The werewolf got ${who.name}! ${left} left.`, 2.2);
+    refreshList();
+  }
+
+  // Werewolf: time ran out. 2 or more runners left = another round, 1 left = they win.
+  function endWolfRound() {
+    const runners = alivePlayers().filter((p) => p !== st.it);
+    st.phase = 'roundEnd';
+    st.t = 3.2;
+    TG.Sound.play('go');
+    if (runners.length >= 2) {
+      banner("Time's up!", '', 2.6);
+      sub(`${runners.length} runners are still in. Another round!`, 3);
+    } else {
+      banner("Time's up!", '', 2.6);
+      sub(runners.length ? `${runners[0].name} escaped the werewolf!` : '', 3);
+    }
+  }
+
+  // Wolf ears, a snout and a tail. They stay on the whole game.
+  function addWolfLook(ch) {
+    const fur = new THREE.MeshStandardMaterial({ color: '#6b6b78', roughness: 0.8 });
+    const pink = new THREE.MeshStandardMaterial({ color: '#ff9bb3', roughness: 0.6 });
+    const black = new THREE.MeshStandardMaterial({ color: '#111111', roughness: 0.3 });
+    const eye = new THREE.MeshBasicMaterial({ color: '#ffe14d' });
+    const mesh = (geo, m, x, y, z, parent) => {
+      const o = new THREE.Mesh(geo, m);
+      o.position.set(x, y, z);
+      o.castShadow = true;
+      parent.add(o);
+      return o;
+    };
+    for (const s of [-1, 1]) {
+      const ear = mesh(new THREE.ConeGeometry(0.11, 0.3, 4), fur, s * 0.2, 0.3, 0, ch.head);
+      ear.rotation.z = -s * 0.35;
+      const inner = mesh(new THREE.ConeGeometry(0.06, 0.18, 4), pink, s * 0.2, 0.29, 0.04, ch.head);
+      inner.rotation.z = -s * 0.35;
+      mesh(new THREE.SphereGeometry(0.05, 8, 6), eye, s * 0.12, 0.05, 0.365, ch.head); // glowing yellow eyes
+    }
+    const snout = mesh(new THREE.BoxGeometry(0.22, 0.15, 0.2), fur, 0, -0.08, 0.36, ch.head);
+    mesh(new THREE.SphereGeometry(0.05, 8, 6), black, 0, 0, 0.11, snout);
+    const tail = mesh(new THREE.ConeGeometry(0.1, 0.55, 8), fur, 0, 0.55, -0.48, ch.rig);
+    tail.rotation.x = -2.1;
+  }
+
+  // Werewolf: it's night time, with a big full moon.
+  function makeNight(scene) {
+    const night = new THREE.Color(scene.background).multiplyScalar(0.3).lerp(new THREE.Color('#1a1440'), 0.5);
+    scene.background = night;
+    if (scene.fog) scene.fog.color = night;
+    const moon = new THREE.Mesh(new THREE.SphereGeometry(18, 24, 16), new THREE.MeshBasicMaterial({ color: '#fff6d0', fog: false }));
+    moon.position.set(-160, 140, -260);
+    scene.add(moon);
   }
 
   function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -1299,7 +1397,7 @@
   }
   function refreshList() {
     $('hud-players').innerHTML = st.players.map((p) =>
-      `<li class="${p.alive ? '' : 'out'} ${isIt(p) ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${isIt(p) ? ' <b>IT</b>' : ''}${st.treasure ? ` <small>${p.score} pt${p.score === 1 ? '' : 's'}</small>` : ''}</li>`).join('');
+      `<li class="${p.alive ? '' : 'out'} ${isIt(p) ? 'it' : ''}" style="--c:${p.color}"><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>you</em>' : ''}${isIt(p) ? (st.werewolf ? ' <b>🐺</b>' : ' <b>IT</b>') : ''}${st.treasure ? ` <small>${p.score} pt${p.score === 1 ? '' : 's'}</small>` : ''}</li>`).join('');
   }
   function updateHud(dt) {
     if (bannerT > 0 && (bannerT -= dt) <= 0) $('banner').className = '';
@@ -1307,14 +1405,15 @@
     const t = Math.max(0, Math.ceil(st.timeLeft));
     $('hud-time').textContent = Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
     $('hud-time').classList.toggle('low', st.phase === 'play' && t <= 5);
-    $('hud-round').textContent = `${st.treasure ? '💰 ' : ''}Round ${st.round}/${st.totalRounds}`;
+    $('hud-round').textContent = st.werewolf ? `🐺 Round ${st.round}` : `${st.treasure ? '💰 ' : ''}Round ${st.round}/${st.totalRounds}`;
     const me = st.human && st.human.alive ? st.human : null;
     $('game-ui').classList.toggle('you-it', !!me && isIt(me));
     $('hud-me').hidden = !me;
     if (me) {
       $('game-stamina').style.width = (me.body.stamina / P.C.stamina) * 100 + '%';
       $('game-stamina').classList.toggle('tired', me.body.exhausted);
-      if (st.treasure) $('hud-role').textContent = isIt(me) ? 'IT team: guard the treasure!' : me.body.frozen > 0 && st.phase === 'play' ? 'Sent home!' : 'Runner: grab the treasure!';
+      if (st.werewolf) $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'Werewolf (wait...)' : 'WEREWOLF! Tag everyone!') : 'Run from the werewolf!';
+      else if (st.treasure) $('hud-role').textContent = isIt(me) ? 'IT team: guard the treasure!' : me.body.frozen > 0 && st.phase === 'play' ? 'Sent home!' : 'Runner: grab the treasure!';
       else $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'IT (wait...)' : 'You are IT! Touch someone!') : me.body.frozen > 0 && st.phase === 'play' ? 'Frozen!' : 'Runner';
     }
     $('hud-spectate').hidden = !(st.human && !st.human.alive && st.phase !== 'over');

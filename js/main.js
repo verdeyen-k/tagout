@@ -24,7 +24,7 @@
     d.count = Math.max(2, Math.min(8, Math.round(Number(s.count)) || d.count));
     if ([30, 45, 60, 90].includes(Number(s.roundLen))) d.roundLen = Number(s.roundLen);
     if (typeof s.mapMode === 'string') d.mapMode = s.mapMode;
-    if (['classic', 'burning', 'treasure'].includes(s.gameMode)) d.gameMode = s.gameMode;
+    if (['classic', 'burning', 'treasure', 'werewolf'].includes(s.gameMode)) d.gameMode = s.gameMode;
     if (Array.isArray(s.slots)) s.slots.slice(0, 8).forEach((o, i) => {
       if (!o) return;
       if (typeof o.name === 'string' && o.name.trim()) d.slots[i].name = o.name.trim().slice(0, 12);
@@ -102,6 +102,7 @@
   // "3 rounds", or for Treasure Time how big the teams are
   function roundsText(mode, n) {
     if (mode === 'treasure') { const k = TG.Game.itsFor(n), r = TG.Game.treasureRounds(n); return `${k} IT${k === 1 ? '' : 's'} vs ${n - k} runner${n - k === 1 ? '' : 's'} · ${r} rounds`; }
+    if (mode === 'werewolf') return `1 werewolf vs ${n - 1} runner${n === 2 ? '' : 's'}`;
     return `${n - 1} round${n === 2 ? '' : 's'}`;
   }
 
@@ -131,6 +132,7 @@
     const notes = [];
     if (setup.gameMode === 'burning') notes.push('🔥 Burning Battle: IT leaves a trail of fire. Touch it and you\'re IT!');
     if (setup.gameMode === 'treasure') notes.push('💰 Treasure Time: the ITs guard the treasure. Runners win if one of them grabs it before time runs out. Tagged runners go back to their spawn.');
+    if (setup.gameMode === 'werewolf') notes.push('🐺 Werewolf: one player is the werewolf for the whole game. Get tagged and you\'re out! The werewolf wins by tagging everyone. When time runs out with 2 or more runners left, there\'s another round. If only 1 is left, they win!');
     if (!anyYou) notes.push('No "You" player, so you will watch the bots play.');
     $('su-note').textContent = notes.join(' ');
     refreshLineup();
@@ -232,7 +234,7 @@
       $('lb-rounds').textContent = `${roster.length} players · ${roundsText(cfg.mode, roster.length)}`;
       $('lb-cfg').textContent = roster.length < 2 ? 'You need at least 2 players. Wait for a friend or add a bot.' : '';
     } else {
-      $('lb-cfg').textContent = `${cfg.mode === 'burning' ? '🔥 Burning Battle · ' : cfg.mode === 'treasure' ? '💰 Treasure Time · ' : ''}${roster.length} players · ${cfg.roundLen} s rounds · ${mapLabel(cfg.mapMode)}`;
+      $('lb-cfg').textContent = `${cfg.mode === 'burning' ? '🔥 Burning Battle · ' : cfg.mode === 'treasure' ? '💰 Treasure Time · ' : cfg.mode === 'werewolf' ? '🐺 Werewolf · ' : ''}${roster.length} players · ${cfg.roundLen} s rounds · ${mapLabel(cfg.mapMode)}`;
     }
     $('lb-hat').innerHTML = hatOptions();
     const me = room.me();

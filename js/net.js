@@ -58,7 +58,7 @@
       mapMode: typeof c.mapMode === 'string' && /^(rotate|random|map:[A-Za-z0-9_-]{1,60})$/.test(c.mapMode) ? c.mapMode : 'rotate',
       bots: Number.isInteger(c.bots) ? Math.max(0, Math.min(7, c.bots)) : 0,
       skill: ['easy', 'normal', 'hard'].includes(c.skill) ? c.skill : 'normal',
-      mode: ['burning', 'treasure'].includes(c.mode) ? c.mode : 'classic',
+      mode: ['burning', 'treasure', 'werewolf'].includes(c.mode) ? c.mode : 'classic',
     };
   }
 
