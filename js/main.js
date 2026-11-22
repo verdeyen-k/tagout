@@ -14,7 +14,7 @@
   const SKILLS = ['easy', 'normal', 'hard'];
   function defaultSetup() {
     return {
-      count: 4, roundLen: 60, mapMode: 'rotate', gameMode: 'classic',
+      count: 4, roundLen: 60, mapMode: 'rotate', gameMode: 'classic', wolf: 'random',
       slots: TG.COLORS.map((c, i) => ({ name: i === 0 ? 'You' : c.name, hat: TG.HATS[(i % 8) + 1].id, ctrl: i === 0 ? 'you' : 'bot', skill: 'normal' })),
     };
   }
@@ -25,6 +25,7 @@
     if ([30, 45, 60, 90].includes(Number(s.roundLen))) d.roundLen = Number(s.roundLen);
     if (typeof s.mapMode === 'string') d.mapMode = s.mapMode;
     if (['classic', 'burning', 'treasure', 'werewolf'].includes(s.gameMode)) d.gameMode = s.gameMode;
+    if (s.wolf === 'random' || (Number.isInteger(s.wolf) && s.wolf >= 0 && s.wolf < 8)) d.wolf = s.wolf;
     if (Array.isArray(s.slots)) s.slots.slice(0, 8).forEach((o, i) => {
       if (!o) return;
       if (typeof o.name === 'string' && o.name.trim()) d.slots[i].name = o.name.trim().slice(0, 12);
@@ -111,6 +112,11 @@
     $('su-rounds').textContent = roundsText(setup.gameMode, setup.count);
     $('su-len').value = String(setup.roundLen);
     $('su-mode').value = setup.gameMode;
+    // Werewolf: pick who the werewolf is (or let the game pick)
+    $('su-wolf-box').hidden = setup.gameMode !== 'werewolf';
+    if (setup.wolf !== 'random' && setup.wolf >= setup.count) setup.wolf = 'random';
+    $('su-wolf').innerHTML = '<option value="random">🎲 Random</option>' + setup.slots.slice(0, setup.count).map((s, i) => `<option value="${i}">${esc(s.name)}${s.ctrl === 'you' ? ' (you)' : ''}</option>`).join('');
+    $('su-wolf').value = String(setup.wolf);
     $('su-map').innerHTML = mapOptions();
     $('su-map').value = setup.mapMode;
     if ($('su-map').value !== setup.mapMode) { setup.mapMode = 'rotate'; $('su-map').value = 'rotate'; }
@@ -155,12 +161,13 @@
   $('su-len').addEventListener('change', (e) => { setup.roundLen = Number(e.target.value); saveSetup(); });
   $('su-map').addEventListener('change', (e) => { setup.mapMode = e.target.value; saveSetup(); });
   $('su-mode').addEventListener('change', (e) => { setup.gameMode = e.target.value; saveSetup(); renderSetup(); });
+  $('su-wolf').addEventListener('change', (e) => { setup.wolf = e.target.value === 'random' ? 'random' : Number(e.target.value); saveSetup(); });
   $('su-back').addEventListener('click', () => showCard('home'));
   $('su-start').addEventListener('click', (e) => {
     e.target.blur();
     const players = setup.slots.slice(0, setup.count).map((s, i) => ({ key: 'k' + i, kind: s.ctrl === 'you' ? 'me' : 'bot', name: s.name, hat: s.hat, ctrl: s.ctrl, skill: s.skill, color: TG.COLORS[i].hex }));
     TG.Sound.play('go');
-    TG.Main.startGame({ players, roundLen: setup.roundLen, mapMode: setup.mapMode, gameMode: setup.gameMode });
+    TG.Main.startGame({ players, roundLen: setup.roundLen, mapMode: setup.mapMode, gameMode: setup.gameMode, wolf: setup.gameMode === 'werewolf' && setup.wolf !== 'random' ? 'k' + setup.wolf : null });
   });
 
   // ---------- online rooms ----------

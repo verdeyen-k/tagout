@@ -201,7 +201,7 @@
     alive.forEach((p, i) => { spots[p.key] = [order[i % n], i >= n ? 1 : 0]; });
     let it = alive[Math.floor(Math.random() * alive.length)];
     if (st.werewolf) { // Werewolf: the same werewolf for the whole game
-      const w = st.byKey.get(st.wolfKey);
+      const w = st.byKey.get(st.wolfKey || st.setup.wolf); // round 1: the werewolf picked in setup (if any)
       if (w && w.alive) it = w;
     }
     setPending();
