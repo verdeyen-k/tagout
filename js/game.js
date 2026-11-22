@@ -265,6 +265,7 @@
   }
   function hostParasiteRound(r, who, map) {
     st.picking = null;
+    for (const p of st.players) p.alive = true; // everyone comes back
     const n = spawnsFor(map).length;
     const order = shuffle([...Array(n).keys()]);
     const spots = {};
@@ -344,7 +345,8 @@
         if (st.phase !== 'play') return;
         st.pending = false;
         if (st.werewolf) wolfTag(by, who);
-        else { if (st.parasite) by.score++; applyTag(by, who, !!ev.fire); }
+        else if (st.parasite) parasiteTag(by, who);
+        else applyTag(by, who, !!ev.fire);
         return;
       }
       case 'out': {
@@ -385,8 +387,8 @@
         st.phase = 'roundEnd';
         st.t = 3.2;
         TG.Sound.play('go');
-        banner("Time's up!", '', 2.6);
-        sub(st.round < st.totalRounds ? 'Next round, someone new gets the parasite!' : 'That was the last round!', 3);
+        banner(ev.all ? '🦠 Got everyone!' : "Time's up!", '', 2.6);
+        sub(st.round < st.totalRounds ? 'Next round, everyone is back and someone new gets the parasite!' : 'That was the last round!', 3);
         return;
       }
       case 'pover': { // Parasite: all the rounds are done
@@ -431,6 +433,7 @@
 
   function applyRound(ev) {
     clearScene();
+    if (st.parasite) for (const p of st.players) p.alive = true; // Parasite: everyone comes back each round
     st.round = ev.r;
     st.pending = false;
     const map = findMap(ev.map) || MF.newMap('day');
@@ -527,7 +530,7 @@
     } else if (st.werewolf) banner(`🐺 Round ${st.round}`, '', 1.6);
     else if (st.parasite) banner(`🦠 Round ${st.round} of ${st.totalRounds}`, '', 1.6);
     else banner(`Round ${st.round} of ${st.totalRounds}`, '', 1.6);
-    if (st.treasure) { /* messages above */ } else if (st.parasite) sub(st.it === st.human ? 'You have the PARASITE! Touch someone to pass it on. Every tag = 1 point!' : `${st.it.name} has the parasite. Don't let them touch you!`, 3.5);
+    if (st.treasure) { /* messages above */ } else if (st.parasite) sub(st.it === st.human ? 'You have the PARASITE! Every tag = 1 point!' : `${st.it.name} has the parasite. Don't let them touch you!`, 3.5);
     else if (st.werewolf) sub(st.it === st.human ? "You're the WEREWOLF! Tag everyone to win!" : `${st.it.name} is the WEREWOLF! Don't get tagged or you're out!`, 3.5); else if (st.burning) sub(st.it === st.human ? "You're IT and ON FIRE! Your fire trail tags people too!" : `${st.it.name} is IT and ON FIRE! Don't touch the fire!`, 3);
     else sub(st.it === st.human ? "You're IT first! Touch someone to tag them!" : `${st.it.name} is IT. Run!`, 3);
     refreshList();
@@ -679,6 +682,11 @@
       p.hat.update(dt);
     }
 
+    // Parasite: the parasite got everyone, so the round is over
+    if (st.parasite && st.host && st.phase === 'play' && !st.pending && st.it && alivePlayers().length === 1) {
+      setPending();
+      send({ t: 'pend', r: st.round, all: true });
+    }
     // Werewolf: everyone got tagged, so the werewolf wins
     if (st.werewolf && st.host && st.phase === 'play' && !st.pending && st.it && alivePlayers().length === 1) {
       setPending();
@@ -771,13 +779,9 @@
     st.it = best;
     best.body.frozen = TAG_FREEZE;
     st.noBack = { it: best, cannot: p, until: st.time + NO_TAG_BACK };
-    burst(best.body.x, best.body.y + 1, best.body.z, fire ? FIRE_COLORS : st.parasite ? ['#4fd16a', '#a6ff4d', '#1f7a35'] : ['#ff2a2a', '#ffd23f', '#ffffff'], 26, 6);
+    burst(best.body.x, best.body.y + 1, best.body.z, fire ? FIRE_COLORS : ['#ff2a2a', '#ffd23f', '#ffffff'], 26, 6);
     TG.Sound.play(fire ? 'burn' : 'tag');
-    if (st.parasite) {
-      if (best.human) { banner('🦠 You got the parasite!', 'it', 1.4); sub(`${p.name} got a point. Go touch someone!`, 2.5); }
-      else if (p.human) sub(`You passed the parasite to ${best.name}! +1 point`, 2.5);
-      else sub(`${p.name} passed the parasite to ${best.name}!`, 2);
-    } else if (fire) {
+    if (fire) {
       if (best.human) { banner("🔥 You're IT!", 'it', 1.4); sub(`You stepped in ${p.name}'s fire. Now YOU'RE on fire!`, 2.5); }
       else if (p.human) sub(`${best.name} stepped in your fire! Run!`, 2.5);
       else sub(`${best.name} stepped in ${p.name}'s fire!`, 2);
@@ -818,6 +822,21 @@
     $('results-list').innerHTML = rank.map((p, i) =>
       `<li style="--c:${p.color}"><b>${i + 1}</b><span class="dot"></span>${esc(p.name)}${p.human ? ' <em>(you)</em>' : ''}${i === 0 ? ' 🏆' : ''}</li>`).join('');
     setTimeout(() => { if (st && st.phase === 'over') { unlockMouse(); $('results').hidden = false; } }, 2200);
+  }
+
+  // ---------- Parasite ----------
+  // The parasite touched someone: +1 point, and they're out until next round. The parasite stays the same.
+  function parasiteTag(by, who) {
+    by.score++;
+    who.alive = false;
+    st.scene.remove(who.ch.root);
+    burst(who.body.x, who.body.y + 0.9, who.body.z, ['#4fd16a', '#a6ff4d', '#1f7a35', who.color], 40, 7);
+    TG.Sound.play('tag');
+    const left = alivePlayers().length - 1;
+    if (who.human) { banner('🦠 The parasite got you!', 'out', 2.2); sub("You're out until next round.", 3); }
+    else if (by.human) sub(`You got ${who.name}! +1 point. ${left} left.`, 2.2);
+    else sub(`${by.name} got ${who.name}! ${left} left.`, 2);
+    refreshList();
   }
 
   // ---------- Werewolf ----------
@@ -1537,6 +1556,7 @@
       else $('hud-role').textContent = me === st.it ? (me.body.frozen > 0 ? 'IT (wait...)' : 'You are IT! Touch someone!') : me.body.frozen > 0 && st.phase === 'play' ? 'Frozen!' : 'Runner';
     }
     $('hud-spectate').hidden = !(st.human && !st.human.alive && st.phase !== 'over');
+    $('hud-spectate').textContent = st.parasite ? "👀 Watching. You're back next round!" : "👀 Watching. You're out this game.";
     $('hud-lock').hidden = isLocked() || st.paused || st.phase === 'over' || st.phase === 'picking';
   }
 

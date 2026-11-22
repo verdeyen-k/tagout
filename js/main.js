@@ -140,7 +140,7 @@
     if (setup.gameMode === 'burning') notes.push('🔥 Burning Battle: IT leaves a trail of fire. Touch it and you\'re IT!');
     if (setup.gameMode === 'treasure') notes.push('💰 Treasure Time: the ITs guard the treasure. Runners win if one of them grabs it before time runs out. Tagged runners go back to their spawn.');
     if (setup.gameMode === 'werewolf') notes.push('🐺 Werewolf: one player is the werewolf for the whole game. Get tagged and you\'re out! The werewolf wins by tagging everyone. When time runs out with 2 or more runners left, there\'s another round. If only 1 is left, they win!');
-    if (setup.gameMode === 'parasite') notes.push('🦠 Parasite: each round someone new starts with the parasite and picks the level. Touch someone to pass it on. Every tag is 1 point. Nobody is out. Most tags at the end wins!');
+    if (setup.gameMode === 'parasite') notes.push('🦠 Parasite: each round someone new starts with the parasite and picks the level. The parasite stays the same all round. Get touched and you\'re out until next round. Every tag is 1 point for the parasite. Most tags at the end wins!');
     if (!anyYou) notes.push('No "You" player, so you will watch the bots play.');
     $('su-note').textContent = notes.join(' ');
     refreshLineup();
