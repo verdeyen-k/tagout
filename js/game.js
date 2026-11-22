@@ -250,7 +250,11 @@
   // ---------- Parasite: whoever starts with the parasite picks the level ----------
   function parasiteMaps() {
     const { official, custom } = allMaps();
-    const list = official.filter((m) => !PARASITE_SKIP.includes(m.id)).concat(st.online ? [] : custom);
+    // your saved maps too, but not ones with the same name as an official map (no doubles!)
+    const nm = (m) => String(m.name || '').trim().toLowerCase();
+    const taken = new Set(official.map(nm));
+    const mine = st.online ? [] : custom.filter((m) => !taken.has(nm(m)) && (taken.add(nm(m)), true));
+    const list = official.filter((m) => !PARASITE_SKIP.includes(m.id)).concat(mine);
     return list.length ? list : [MF.newMap('day')];
   }
   function hostParasitePick(r) {
